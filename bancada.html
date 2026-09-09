@@ -1,0 +1,123 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Bancada — MW Letícia Weather Card</title>
+<style>
+  :root { color-scheme: light; --primary-text-color:#212121; --secondary-text-color:#727272;
+          --card-background-color:#f2f3f5; --ha-card-background:#fff; --primary-color:#03a9f4;
+          --ha-card-border-radius:14px; --divider-color:#e0e0e0; --mdc-icon-size:24px; }
+  html[data-tema="escuro"] { color-scheme: dark; --primary-text-color:#e1e1e1;
+          --secondary-text-color:#9b9b9b; --card-background-color:#111214;
+          --ha-card-background:#1c1c1e; --divider-color:#333; }
+  body { margin:0; font:14px/1.4 -apple-system,system-ui,sans-serif;
+         background:var(--card-background-color); color:var(--primary-text-color); }
+  .barra { position:sticky; top:0; z-index:9; display:flex; gap:8px; flex-wrap:wrap;
+           padding:10px 14px; background:var(--ha-card-background);
+           border-bottom:1px solid var(--divider-color); align-items:center; }
+  button { font:inherit; padding:5px 10px; border-radius:8px; cursor:pointer;
+           border:1px solid var(--divider-color); background:transparent;
+           color:var(--primary-text-color); }
+  .grade { display:flex; flex-wrap:wrap; gap:18px; padding:18px; align-items:flex-start; }
+  .celula { width:var(--largura,340px); }
+  .celula h3 { margin:0 0 6px; font-size:11px; font-weight:700; letter-spacing:.5px;
+               text-transform:uppercase; color:var(--secondary-text-color); }
+</style>
+<div class="barra">
+  <button onclick="tema()">alternar tema</button>
+  <button onclick="largura(340)">1180</button>
+  <button onclick="largura(290)">768</button>
+  <button onclick="largura(200)">390</button>
+  <button onclick="cond('sunny')">sol</button>
+  <button onclick="cond('clear-night')">noite</button>
+  <button onclick="cond('rainy')">chuva</button>
+  <button onclick="cond('lightning-rainy')">tempestade</button>
+  <button onclick="alerta()">com alerta</button>
+  <button onclick="semSpread()">sem a integração MW</button>
+  <span id="eco"></span>
+</div>
+<div class="grade" id="grade"></div>
+<script>
+  customElements.define("ha-card", class extends HTMLElement {
+    connectedCallback(){ this.style.display="block";
+      this.style.background="var(--ha-card-background)";
+      this.style.borderRadius="var(--ha-card-border-radius)";
+      this.style.boxShadow="0 1px 3px rgba(0,0,0,.18)"; }
+  });
+  customElements.define("ha-form", class extends HTMLElement {});
+  customElements.define("ha-icon", class extends HTMLElement {
+    static get observedAttributes(){ return ["icon"]; }
+    connectedCallback(){ this.render(); }
+    attributeChangedCallback(){ this.render(); }
+    render(){ const n=(this.getAttribute("icon")||"").split(":")[1]||"";
+      const m={ "weather-sunny":"☀️","weather-night":"🌙","weather-partly-cloudy":"⛅",
+        "weather-cloudy":"☁️","weather-rainy":"🌦️","weather-pouring":"🌧️",
+        "weather-lightning-rainy":"⛈️","weather-lightning":"🌩️","weather-fog":"🌫️",
+        "weather-snowy":"❄️","water-percent":"💧","weather-windy":"🌬️","gauge":"⏱️",
+        "weather-sunny-alert":"🔆" };
+      this.textContent=m[n]||"•"; this.style.fontSize="var(--mdc-icon-size,24px)";
+      this.style.lineHeight="1"; this.style.display="inline-block"; }
+  });
+</script>
+<script src="dist/mw-leticia-weather-card.js"></script>
+<script>
+  let condicao="clear-night", spread=2.6, comAlerta=false;
+  const agora=Date.now();
+  const horaria=()=>Array.from({length:24},(_,i)=>({
+    datetime:new Date(agora+i*3600000).toISOString(),
+    temperature: 19+Math.sin(i/3.4)*5+ (i>10? 3:0),
+    condition: condicao,
+    precipitation_probability: Math.max(0, Math.round(40*Math.sin(i/5)))
+  }));
+  const diaria=()=>Array.from({length:8},(_,i)=>({
+    datetime:new Date(agora+i*86400000).toISOString(),
+    temperature: 27+Math.sin(i)*3, templow: 18+Math.cos(i)*2,
+    condition: ["sunny","partlycloudy","rainy","lightning-rainy","cloudy"][i%5]
+  }));
+  const hass=()=>({
+    config:{latitude:-15.83985,longitude:-48.03618,elevation:1200},
+    connection:{ subscribeMessage:(cb,msg)=>{
+      setTimeout(()=>cb({forecast: msg.forecast_type==="daily"?diaria():horaria()}),0);
+      return Promise.resolve(()=>{});
+    }},
+    states:{
+      "weather.casa":{state:condicao,attributes:{
+        friendly_name:"Águas Claras", temperature:19.1, apparent_temperature:19.8,
+        humidity:83, pressure:1019.0, wind_speed:6.3, wind_bearing:102, uv_index:0,
+        temperature_unit:"°C",
+        confianca_spread: spread, temperatura_p10: 18.4, temperatura_p90: 21.0,
+        por_modelo:{ecmwf_ifs025:18.3,gfs_seamless:21.7,icon_seamless:19.5,metno_seamless:18.6},
+        fala_agora:"Agora 19 graus em Águas Claras.", alertas: comAlerta?2:0 }},
+      "sensor.alertas":{state:comAlerta?"2":"0",attributes:{
+        fala_alertas:"...", lista: comAlerta?[
+          {severidade:"perigo",severidade_rotulo:"Perigo",cor:"#f57c00",
+           titulo:"Umidade do ar baixa",descricao:"Umidade relativa mínima de 18 por cento.",
+           oficial:false,fonte:"derivado"},
+          {severidade:"potencial",severidade_rotulo:"Perigo potencial",cor:"#ffa600",
+           titulo:"Tempestade",descricao:"Chuva entre 20 e 30 mm/h e rajadas de 40 a 60 km/h.",
+           oficial:true,fonte:"INMET"}]:[] }},
+      "sensor.pm25":{state:"13.5",attributes:{device_class:"pm25",faixa:"atenção"}},
+      "sensor.aqi":{state:"47",attributes:{device_class:"aqi"}},
+    }});
+  const layouts=["faixa","hoje","semana","completo"];
+  const cartoes=[];
+  function montar(){
+    const g=document.getElementById("grade"); g.innerHTML=""; cartoes.length=0;
+    for(const l of layouts){
+      const cel=document.createElement("div"); cel.className="celula";
+      cel.innerHTML="<h3>"+l+"</h3>";
+      const c=document.createElement("mw-leticia-weather-card");
+      c.setConfig({type:"custom:mw-leticia-weather-card",entity:"weather.casa",layout:l});
+      c.hass=hass(); cel.appendChild(c); g.appendChild(cel); cartoes.push(c);
+    }
+    eco();
+  }
+  function eco(){document.getElementById("eco").textContent=
+    condicao+" · spread "+(spread===null?"—":spread)+(comAlerta?" · com alerta":"");}
+  function atualizar(){ cartoes.forEach(c=>{c._chave=null; c.hass=hass();}); eco(); }
+  function cond(x){ condicao=x; atualizar(); }
+  function alerta(){ comAlerta=!comAlerta; atualizar(); }
+  function semSpread(){ spread = spread===null? 2.6 : null; atualizar(); }
+  function tema(){const h=document.documentElement;
+    h.dataset.tema=h.dataset.tema==="escuro"?"":"escuro";}
+  function largura(px){document.documentElement.style.setProperty("--largura",px+"px");}
+  montar();
+</script>

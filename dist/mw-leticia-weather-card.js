@@ -1,0 +1,1083 @@
+/* mw-ha-leticia-weather-card — dois tipos de card num arquivo só:
+ *
+ *   custom:mw-leticia-weather-card   o card de tempo, em cinco layouts
+ *   custom:mw-leticia-sky-card       o céu no cabeçalho, no menu e no fundo
+ *
+ * Precedente da casa para dois tipos num arquivo: mw-ha-top-buttons-pack.
+ * Assim continua valendo o padrão "arquivo único, sem build, sem zip_release",
+ * e o céu nasce DESLIGADO — só existe onde alguém colocar o card de controle.
+ *
+ * O QUE ESTE CARD FAZ E NENHUM OUTRO FAZ
+ * ──────────────────────────────────────
+ * Desenha a DISCÓRDIA. A linha das próximas horas vem com a nuvem p10–p90 do
+ * conjunto de modelos por trás. Em 09/09/2026, no mesmo minuto, cinco
+ * aplicativos discordaram em 4 °C sobre o mesmo quintal — um número sozinho
+ * mente por omissão, e aqui a largura da dúvida é parte do desenho.
+ *
+ * Funciona com QUALQUER entidade `weather.`; com a integração
+ * mw-ha-leticia-weather ele ganha a banda de confiança, os alertas e a fala.
+ *
+ * Repo: https://github.com/visaodeempresa/mw-ha-leticia-weather-card
+ */
+(() => {
+  "use strict";
+  const VERSION = "0.1.0";
+
+  // >>> mw-climate-scale v1 — fonte canônica: /Volumes/SSD-T1-01/CLAUDE-SSD/IA/lib/mw-climate-scale/mw-climate-scale.js
+  // Escala canônica de cor por temperatura (°C) e umidade relativa (%).
+  // Regra: IA/rules/global/40-cores-de-temperatura-e-umidade.md.
+  const MW_CLIMATE_SCALE_ALPHA = 0.5;
+
+  // 19 limites superiores inclusivos → 20 cores (a última vale de 46 °C para cima).
+  const MW_TEMP_STOPS = [
+    3.99, 6.99, 8.99, 13.99, 15.99, 17.99, 18.99, 20.99, 21.99, 22.99,
+    23.99, 24.99, 25.99, 26.99, 29.99, 32.99, 35.99, 39.99, 45.99,
+  ];
+  const MW_TEMP_RGB = (
+    "0,0,0 0,0,139 0,0,255 70,130,180 0,206,209 64,224,208 0,255,255 144,238,144 0,255,0 50,205,50 " +
+    "127,255,0 154,205,50 255,255,0 255,215,0 255,165,0 255,99,71 255,69,0 178,34,34 139,0,0 139,0,0"
+  ).split(" ");
+
+  // Uma faixa por ponto percentual: índice n cobre [n, n+1); 100 é faixa própria.
+  // O template original fecha a faixa em n.99 e deixa (n.99, n+1) sem dono — o
+  // laço cai no fallback, que é a cor de 100% (preto). Sensor que reporte
+  // 58,995 % pisca preto. Aqui o vão é fechado de propósito.
+  const MW_HUM_RGB = (
+    "0,0,0 51,0,0 102,0,0 153,0,0 204,0,0 255,0,0 255,11,0 255,22,0 255,33,0 255,45,0 " +
+    "255,56,0 255,67,0 255,78,0 255,89,0 255,100,0 255,111,0 255,122,0 255,133,0 255,144,0 255,155,0 " +
+    "255,165,0 255,170,0 255,174,0 255,179,0 255,183,0 255,188,0 255,192,0 255,197,0 255,201,0 255,206,0 " +
+    "255,210,0 255,215,0 255,219,0 255,224,0 255,228,0 255,233,0 255,237,0 255,242,0 255,246,0 255,251,0 " +
+    "255,255,0 170,255,85 85,255,170 0,255,255 12,252,253 24,249,251 36,246,249 48,243,247 60,240,245 72,237,243 " +
+    "84,234,241 96,231,239 108,228,237 120,225,235 132,222,234 144,219,231 156,216,229 173,216,230 115,144,238 58,72,246 " +
+    "0,0,255 0,0,249 0,0,243 0,0,237 0,0,231 0,0,225 0,0,219 0,0,213 0,0,207 0,0,201 " +
+    "0,0,195 0,0,189 0,0,183 0,0,177 0,0,171 0,0,165 0,0,159 0,0,153 0,0,147 0,0,141 " +
+    "0,0,139 0,0,132 0,0,125 0,0,118 0,0,111 0,0,104 0,0,97 0,0,90 0,0,83 0,0,76 " +
+    "0,0,69 0,0,62 0,0,55 0,0,48 0,0,41 0,0,34 0,0,27 0,0,20 0,0,13 0,0,6 " +
+    "0,0,0"
+  ).split(" ");
+  const MW_HUM_STOPS = MW_HUM_RGB.slice(1).map((_, i) => i + 0.99);
+
+  const mwClimateRgba = (triplet, alpha) => `rgba(${triplet.split(",").join(", ")}, ${alpha})`;
+
+  // Faixas + cores no formato do algoritmo de faixa comum: a cor é a primeira
+  // cujo limite superior não foi ultrapassado. `clamp` existe porque umidade
+  // fora de 0..100 é ruído de sensor, não frio.
+  const mwClimateScale = (kind, alpha) => {
+    const a = Number.isFinite(Number(alpha)) ? Number(alpha) : MW_CLIMATE_SCALE_ALPHA;
+    const hum = kind === "hum" || kind === "humidity" || kind === "umidade";
+    return {
+      stops: hum ? MW_HUM_STOPS : MW_TEMP_STOPS,
+      colors: (hum ? MW_HUM_RGB : MW_TEMP_RGB).map((t) => mwClimateRgba(t, a)),
+      clamp: hum ? [0, 100] : null,
+    };
+  };
+
+  // Cor seca (sem degradê), do jeito que o button-card faz.
+  const mwClimateColor = (kind, value, alpha) => {
+    const s = mwClimateScale(kind, alpha);
+    let v = Number(value);
+    if (!Number.isFinite(v)) return null;
+    if (s.clamp) v = Math.min(s.clamp[1], Math.max(s.clamp[0], v));
+    const i = s.stops.findIndex((stop) => v <= stop);
+    return s.colors[i === -1 ? s.stops.length : i];
+  };
+  // <<< mw-climate-scale v1
+
+  // ── astronomia de bolso ───────────────────────────────────────────────────
+  // Sol e lua na posição REAL: é o que separa um céu que reage de um céu que
+  // ilustra. Precisão de ~1°, que para desenhar um disco de 12 px é folga.
+  const RAD = Math.PI / 180;
+
+  const diaJuliano = (d) => d.getTime() / 86400000 + 2440587.5;
+
+  const posicaoSolar = (data, lat, lon) => {
+    const n = diaJuliano(data) - 2451545.0;
+    const L = (280.46 + 0.9856474 * n) % 360;
+    const g = ((357.528 + 0.9856003 * n) % 360) * RAD;
+    const lambda = (L + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * RAD;
+    const epsilon = (23.439 - 0.0000004 * n) * RAD;
+    const decl = Math.asin(Math.sin(epsilon) * Math.sin(lambda));
+    const ra = Math.atan2(Math.cos(epsilon) * Math.sin(lambda), Math.cos(lambda));
+    const gmst = (18.697374558 + 24.06570982441908 * n) % 24;
+    const hora = (gmst * 15 + lon) * RAD - ra;
+    const latR = lat * RAD;
+    const elev = Math.asin(
+      Math.sin(latR) * Math.sin(decl) + Math.cos(latR) * Math.cos(decl) * Math.cos(hora)
+    );
+    const azim = Math.atan2(
+      Math.sin(hora),
+      Math.cos(hora) * Math.sin(latR) - Math.tan(decl) * Math.cos(latR)
+    );
+    return { elevacao: elev / RAD, azimute: ((azim / RAD + 180) % 360 + 360) % 360 };
+  };
+
+  // Fase da lua de 0 (nova) a 1 (nova de novo); 0,5 é cheia.
+  const faseLunar = (data) => {
+    const sinodico = 29.530588853;
+    const nova = 2451550.1; // 2000-01-06, lua nova de referência
+    return (((diaJuliano(data) - nova) / sinodico) % 1 + 1) % 1;
+  };
+
+  // ── paleta do céu ─────────────────────────────────────────────────────────
+  // A cor sai de (condição × altura do sol) — nunca da hora do relógio, que
+  // mente perto dos trópicos e mente muito longe deles.
+  const CEUS = {
+    noite:      ["#070b18", "#111a33", "#1b2547"],
+    alvorada:   ["#1b2547", "#7a4a6b", "#e8a06a"],
+    manha:      ["#4a9fd8", "#87c5e8", "#c8e4f5"],
+    dia:        ["#2f86d6", "#67b3e8", "#a9d8f3"],
+    tarde:      ["#2a6fb5", "#7f9fd0", "#e6c39a"],
+    poente:     ["#2b2a52", "#a4536a", "#f0a05e"],
+    nublado:    ["#5a6472", "#7c8794", "#a3adb8"],
+    nubladoNoite: ["#0d1220", "#1c2433", "#2c3648"],
+    chuva:      ["#2f3a48", "#48576a", "#63758c"],
+    tempestade: ["#16181f", "#2b2f3d", "#3f4557"],
+    neve:       ["#7d8794", "#a7b1bd", "#d3dae1"],
+    nevoeiro:   ["#6f757c", "#93999f", "#bfc4c9"],
+  };
+
+  const paletaDoCeu = (ceu, elevacao, noiteForcada) => {
+    const noite = noiteForcada === true || (noiteForcada !== false && elevacao < -6);
+    if (ceu === "tempestade") return CEUS.tempestade;
+    if (ceu === "chuva") return CEUS.chuva;
+    if (ceu === "neve") return CEUS.neve;
+    if (ceu === "nevoeiro") return CEUS.nevoeiro;
+    if (ceu === "nuvem") return noite ? CEUS.nubladoNoite : CEUS.nublado;
+    if (noite) return CEUS.noite;
+    if (elevacao < 3) return elevacao < 0 ? CEUS.alvorada : CEUS.poente;
+    if (elevacao < 15) return CEUS.tarde;
+    if (elevacao < 35) return CEUS.manha;
+    return CEUS.dia;
+  };
+
+  // Códigos WMO → desenho do céu. A mesma tabela da integração; aqui em forma
+  // curta porque o card só precisa do desenho, não do texto.
+  const CEU_POR_CONDICAO = {
+    "clear-night": "limpo", sunny: "limpo", partlycloudy: "nuvem",
+    cloudy: "nuvem", fog: "nevoeiro", hail: "tempestade",
+    lightning: "tempestade", "lightning-rainy": "tempestade",
+    pouring: "chuva", rainy: "chuva", snowy: "neve", "snowy-rainy": "chuva",
+    windy: "nuvem", "windy-variant": "nuvem", exceptional: "nuvem",
+  };
+
+  const ICONE = {
+    "clear-night": "mdi:weather-night", sunny: "mdi:weather-sunny",
+    partlycloudy: "mdi:weather-partly-cloudy", cloudy: "mdi:weather-cloudy",
+    fog: "mdi:weather-fog", hail: "mdi:weather-hail",
+    lightning: "mdi:weather-lightning", "lightning-rainy": "mdi:weather-lightning-rainy",
+    pouring: "mdi:weather-pouring", rainy: "mdi:weather-rainy",
+    snowy: "mdi:weather-snowy", "snowy-rainy": "mdi:weather-snowy-rainy",
+    windy: "mdi:weather-windy", "windy-variant": "mdi:weather-windy-variant",
+    exceptional: "mdi:alert-circle-outline",
+  };
+
+  const TEXTO = {
+    "clear-night": "céu limpo", sunny: "sol", partlycloudy: "parcialmente nublado",
+    cloudy: "nublado", fog: "nevoeiro", hail: "granizo", lightning: "trovoadas",
+    "lightning-rainy": "tempestade", pouring: "chuva forte", rainy: "chuva",
+    snowy: "neve", "snowy-rainy": "chuva com neve", windy: "ventando",
+    "windy-variant": "ventando", exceptional: "tempo excepcional",
+  };
+
+  const DIAS = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+
+  const DEFAULTS = {
+    layout: "hoje",
+    ceu_animado: true,
+    mostrar_banda: true,
+    mostrar_alertas: true,
+    mostrar_ar: true,
+    horas: 24,
+    dias: 7,
+  };
+
+  const LABELS = {
+    entity: "Entidade de tempo",
+    name: "Título",
+    layout: "Layout",
+    ceu_animado: "Céu animado",
+    mostrar_banda: "Banda de confiança do conjunto",
+    mostrar_alertas: "Faixa de alertas",
+    mostrar_ar: "Qualidade do ar e UV",
+    horas: "Horas na fita",
+    dias: "Dias na semana",
+    superficies: "Onde pintar o céu",
+    intensidade: "Intensidade",
+    movimento: "Movimento",
+  };
+
+  const num = (v) => {
+    if (v === null || v === undefined || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const fmt = (v, c = 0) =>
+    v === null || v === undefined ? "—" : Number(v).toFixed(c).replace(".", ",");
+  const esc = (s) =>
+    String(s === null || s === undefined ? "" : s).replace(
+      /[&<>"']/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+    );
+
+  // ── desenho do céu (SVG, sem laço de animação) ────────────────────────────
+  // Estrelas, sol, lua e chuva são elementos com `animation` de CSS: o
+  // compositor cuida deles na GPU e a aba oculta pausa sozinha, sem timer para
+  // gerenciar. Zero JavaScript por quadro — é o que segura o orçamento.
+  const desenharCeu = (ceu, elevacao, azimute, fase, animado, semente, noiteForcada) => {
+    const partes = [];
+    const noite =
+      noiteForcada === true || (noiteForcada !== false && elevacao < -6);
+    const alt = Math.max(-12, Math.min(60, elevacao));
+    const y = 62 - ((alt + 12) / 72) * 48; // 62 (horizonte) → 14 (zênite)
+    const x = 8 + (azimute / 360) * 84;
+
+    if (noite && ceu !== "tempestade" && ceu !== "chuva") {
+      // Campo de estrelas determinístico: a mesma casa vê o mesmo céu, e o
+      // desenho não pisca a cada repintura.
+      let s = semente;
+      const rnd = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+      for (let i = 0; i < 26; i++) {
+        const ex = 2 + rnd() * 96;
+        const ey = 2 + rnd() * 60;
+        const r = 0.35 + rnd() * 0.75;
+        const atraso = (rnd() * 4).toFixed(1);
+        partes.push(
+          `<circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="${r.toFixed(2)}" ` +
+            `fill="#fff" opacity="${(0.35 + rnd() * 0.5).toFixed(2)}" ` +
+            `${animado ? `class="cintila" style="animation-delay:${atraso}s"` : ""}/>`
+        );
+      }
+    }
+
+    if (ceu === "nuvem" || ceu === "chuva" || ceu === "tempestade" || ceu === "neve") {
+      const nuvens = ceu === "nuvem" ? 2 : 3;
+      for (let i = 0; i < nuvens; i++) {
+        const cx = 12 + i * 34;
+        const cy = 22 + (i % 2) * 12;
+        const e = 1 + (i % 2) * 0.25;
+        partes.push(
+          `<g class="${animado ? "nuvem" : ""}" style="animation-delay:${-i * 9}s" ` +
+            `opacity="${ceu === "nuvem" ? 0.5 : 0.72}">` +
+            `<ellipse cx="${cx}" cy="${cy}" rx="${16 * e}" ry="${7 * e}" fill="#fff"/>` +
+            `<ellipse cx="${cx + 10 * e}" cy="${cy - 4}" rx="${11 * e}" ry="${6 * e}" fill="#fff"/>` +
+            `</g>`
+        );
+      }
+    }
+
+    if (ceu === "chuva" || ceu === "tempestade") {
+      for (let i = 0; i < 14; i++) {
+        const rx = 4 + i * 7;
+        partes.push(
+          `<line x1="${rx}" y1="34" x2="${rx - 3}" y2="46" stroke="#cfe3f5" ` +
+            `stroke-width="1.1" stroke-linecap="round" opacity="0.65" ` +
+            `${animado ? `class="chuva" style="animation-delay:${(i % 7) * 0.13}s"` : ""}/>`
+        );
+      }
+    }
+    if (ceu === "tempestade") {
+      partes.push(
+        `<path d="M 52 26 l -7 14 h 6 l -5 13 12 -16 h -6 z" fill="#ffe08a" ` +
+          `${animado ? 'class="raio"' : 'opacity="0.9"'}/>`
+      );
+    }
+    return { svg: partes.join(""), astro: { x, y, noite, fase, ceu } };
+  };
+
+  // Sol e lua saem em HTML, não em SVG: o SVG do céu é esticado
+  // (`preserveAspectRatio="none"`) e deixaria os dois OVAIS. Um `<div>`
+  // redondo com `border-radius` é imune ao estica-e-puxa e ainda anima na GPU.
+  const astroHtml = ({ x, y, noite, fase, ceu }) => {
+    const esq = `left:${x.toFixed(1)}%`;
+    const topo = `top:${((y / 80) * 118).toFixed(0)}px`;
+    if (noite) {
+      const iluminado = Math.abs(fase - 0.5) * 2; // 0 cheia, 1 nova
+      const desloc = (fase < 0.5 ? 1 : -1) * iluminado * 100;
+      return (
+        `<div class="lua" style="${esq};${topo}">` +
+        (iluminado > 0.06
+          ? `<i style="transform:translateX(${desloc.toFixed(0)}%)"></i>`
+          : "") +
+        `</div>`
+      );
+    }
+    if (ceu === "limpo" || ceu === "nuvem") {
+      return `<div class="sol" style="${esq};${topo}"></div>`;
+    }
+    return "";
+  };
+
+  const CSS_CEU = `
+    .sol, .lua { position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px;
+                 border-radius: 50%; pointer-events: none; }
+    .sol { background: #ffd76a; box-shadow: 0 0 26px 12px rgba(255,215,106,.28); }
+    .lua { background: #f3efdf; overflow: hidden; }
+    .lua i { position: absolute; inset: 0; border-radius: 50%;
+             background: var(--mw-ceu-fundo, #0b1020); }
+    .cintila { animation: mwCintila 4s ease-in-out infinite alternate; }
+    @keyframes mwCintila { from { opacity: .25 } to { opacity: .95 } }
+    .nuvem { animation: mwNuvem 46s linear infinite; }
+    @keyframes mwNuvem { from { transform: translateX(-24px) } to { transform: translateX(112px) } }
+    .chuva { animation: mwChuva 1.05s linear infinite; }
+    @keyframes mwChuva { from { transform: translateY(-10px); opacity: 0 }
+                          20% { opacity: .7 } to { transform: translateY(18px); opacity: 0 } }
+    .raio { animation: mwRaio 5.5s steps(1) infinite; }
+    @keyframes mwRaio { 0%,92% { opacity: 0 } 93%,95% { opacity: 1 } 96%,100% { opacity: 0 } }
+    @media (prefers-reduced-motion: reduce) {
+      .cintila, .nuvem, .chuva, .raio { animation: none !important; }
+      .chuva { opacity: .6 }
+      .raio { opacity: .9 }
+    }
+  `;
+
+  const ESTILO = `
+    :host { display: block; }
+    ha-card { overflow: hidden; position: relative; }
+    .ceu { position: absolute; inset: 0; z-index: 0; }
+    .astros { position: absolute; top: 0; left: 0; right: 0; height: 118px; }
+    .astros svg { width: 100%; height: 100%; display: block; }
+    /* Véu: o texto é branco e o céu vai de quase preto a azul claro. Sem
+       este degradê, o contraste cai abaixo de 4,5:1 ao meio-dia. */
+    .ceu::after { content: ""; position: absolute; inset: 0;
+      background: linear-gradient(180deg, rgba(8,12,22,.34), rgba(8,12,22,.10) 45%,
+                                  rgba(8,12,22,.30)); }
+    .conteudo { position: relative; z-index: 1; padding: 14px 16px;
+                display: flex; flex-direction: column; gap: 12px;
+                color: var(--mw-ceu-tinta, #fff);
+                text-shadow: 0 1px 3px rgba(0,0,0,.45); }
+    .topo { display: flex; align-items: flex-start; justify-content: space-between;
+            gap: 12px; }
+    .agora { display: flex; align-items: baseline; gap: 6px; }
+    .agora .n { font-size: 46px; font-weight: 300; line-height: .95;
+                font-variant-numeric: tabular-nums; letter-spacing: -2px; }
+    .agora .u { font-size: 18px; font-weight: 500; opacity: .85; }
+    .local { font-size: 13px; font-weight: 600; opacity: .95; }
+    .cond { font-size: 13px; opacity: .9; }
+    .medidas { display: flex; flex-wrap: wrap; gap: 10px 16px; font-size: 12px;
+               opacity: .95; }
+    .medidas span { display: inline-flex; align-items: center; gap: 4px; }
+    .confianca { display: inline-flex; align-items: center; gap: 5px;
+                 font-size: 11px; padding: 2px 7px; border-radius: 99px;
+                 background: rgba(255,255,255,.16); backdrop-filter: blur(3px); }
+    .fita { width: 100%; height: 92px; display: block; }
+    .semana { display: grid; gap: 4px; }
+    .linha { display: grid; grid-template-columns: 52px 24px 1fr 32px 34px;
+             align-items: center; gap: 8px; font-size: 12px; }
+    .barra { height: 7px; border-radius: 99px; position: relative;
+             background: rgba(255,255,255,.18); overflow: hidden; }
+    .barra i { position: absolute; top: 0; bottom: 0; border-radius: 99px; }
+    .alerta { display: flex; gap: 8px; align-items: flex-start; font-size: 12px;
+              line-height: 1.35; padding: 7px 10px; border-radius: 10px;
+              background: rgba(0,0,0,.28); border-left: 3px solid var(--cor, #ffa600);
+              text-shadow: none; color: #fff; }
+    .alerta b { font-weight: 700; }
+    .ar { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; opacity: .95; }
+    .vazio { padding: 20px; text-align: center; font-size: 13px;
+             color: var(--secondary-text-color); }
+    .faixa { display: flex; align-items: center; gap: 14px; }
+    .faixa .n { font-size: 30px; }
+    button.abrir { all: unset; cursor: pointer; display: block; }
+    button.abrir:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+    ${CSS_CEU}
+  `;
+
+  // ── leitura do estado ─────────────────────────────────────────────────────
+  const lerTempo = (hass, id) => {
+    const st = hass && hass.states[id];
+    if (!st) return null;
+    const a = st.attributes || {};
+    return {
+      estado: st.state,
+      nome: a.friendly_name || id,
+      temperatura: num(a.temperature),
+      sensacao: num(a.apparent_temperature),
+      umidade: num(a.humidity),
+      pressao: num(a.pressure),
+      vento: num(a.wind_speed),
+      rajada: num(a.wind_gust_speed),
+      direcao: num(a.wind_bearing),
+      nuvens: num(a.cloud_coverage),
+      uv: num(a.uv_index),
+      unidade: a.temperature_unit || "°C",
+      // Estes só existem com a integração MW Letícia Weather. Sem eles o card
+      // funciona igual, só sem a banda — degradar em silêncio é requisito.
+      spread: num(a.confianca_spread),
+      p10: num(a.temperatura_p10),
+      p90: num(a.temperatura_p90),
+      porModelo: a.por_modelo || null,
+      falaAgora: a.fala_agora || null,
+      alertas: num(a.alertas),
+    };
+  };
+
+  const lerAlertas = (hass) => {
+    const saida = [];
+    for (const id of Object.keys(hass.states)) {
+      const st = hass.states[id];
+      const a = st.attributes || {};
+      if (Array.isArray(a.lista) && a.fala_alertas !== undefined) {
+        for (const x of a.lista) saida.push(x);
+      }
+    }
+    return saida;
+  };
+
+  const lerAr = (hass) => {
+    const saida = {};
+    for (const id of Object.keys(hass.states)) {
+      const st = hass.states[id];
+      const dc = (st.attributes || {}).device_class;
+      if (dc === "pm25" && saida.pm25 === undefined) {
+        saida.pm25 = num(st.state);
+        saida.faixa = (st.attributes || {}).faixa;
+      }
+      if (dc === "aqi" && saida.aqi === undefined) saida.aqi = num(st.state);
+    }
+    return saida;
+  };
+
+  // ── o card ────────────────────────────────────────────────────────────────
+  class WeatherCard extends HTMLElement {
+    setConfig(config) {
+      if (!config || !config.entity) {
+        throw new Error("Informe `entity`: uma entidade `weather.`.");
+      }
+      if (!String(config.entity).startsWith("weather.")) {
+        throw new Error("`entity` precisa ser do domínio `weather.`.");
+      }
+      const layouts = ["faixa", "hoje", "semana", "completo", "alerta"];
+      if (config.layout && !layouts.includes(config.layout)) {
+        throw new Error(`layout desconhecido: ${config.layout}. Use ${layouts.join(", ")}.`);
+      }
+      this._config = { ...DEFAULTS, ...config };
+      this._chave = null;
+      if (this._hass) this._atualizar();
+    }
+
+    set hass(hass) {
+      this._hass = hass;
+      this._atualizar();
+    }
+
+    connectedCallback() {
+      // A previsão vem por serviço, não por atributo (o atributo `forecast`
+      // saiu do HA). Uma assinatura por card, cancelada ao sair da tela.
+      this._assinar();
+    }
+
+    disconnectedCallback() {
+      if (this._cancelar) {
+        this._cancelar.then((f) => f && f()).catch(() => {});
+        this._cancelar = null;
+      }
+    }
+
+    getCardSize() {
+      return { faixa: 2, alerta: 2, hoje: 6, semana: 5, completo: 9 }[this._config.layout] || 6;
+    }
+
+    static getConfigElement() {
+      return document.createElement("mw-leticia-weather-card-editor");
+    }
+
+    static getStubConfig(hass) {
+      const id = Object.keys(hass && hass.states ? hass.states : {}).find((k) =>
+        k.startsWith("weather.")
+      );
+      return { type: "custom:mw-leticia-weather-card", entity: id || "", layout: "hoje" };
+    }
+
+    _assinar() {
+      if (!this._hass || !this._config || this._cancelar) return;
+      const tipo = this._config.layout === "semana" ? "daily" : "hourly";
+      this._cancelar = this._hass.connection
+        .subscribeMessage(
+          (ev) => {
+            this._previsao = (ev && ev.forecast) || [];
+            this._chave = null;
+            this._atualizar();
+          },
+          {
+            type: "weather/subscribe_forecast",
+            forecast_type: tipo,
+            entity_id: this._config.entity,
+          }
+        )
+        .catch(() => null);
+    }
+
+    _atualizar() {
+      if (!this._config || !this._hass) return;
+      if (!this._cancelar) this._assinar();
+      const d = lerTempo(this._hass, this._config.entity);
+      const chave = JSON.stringify([
+        d && d.estado,
+        d && d.temperatura,
+        d && d.umidade,
+        d && d.spread,
+        (this._previsao || []).length,
+        (this._previsao || [])[0] && this._previsao[0].datetime,
+        this._config.layout,
+        new Date().getHours(),
+      ]);
+      if (chave === this._chave) return;
+      this._chave = chave;
+      this._render(d);
+    }
+
+    _render(d) {
+      if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+      const c = this._config;
+      if (!d) {
+        this.shadowRoot.innerHTML =
+          `<style>${ESTILO}</style><ha-card><div class="vazio">` +
+          `Entidade não encontrada: ${esc(c.entity)}</div></ha-card>`;
+        return;
+      }
+
+      const agora = new Date();
+      const lat = num(this._hass.config && this._hass.config.latitude) ?? 0;
+      const lon = num(this._hass.config && this._hass.config.longitude) ?? 0;
+      const sol = posicaoSolar(agora, lat, lon);
+      const ceu = CEU_POR_CONDICAO[d.estado] || "nuvem";
+      const noite = d.estado === "clear-night" ? true : d.estado === "sunny" ? false : null;
+      const paleta = paletaDoCeu(ceu, sol.elevacao, noite);
+      const fase = faseLunar(agora);
+      const semente = Math.floor(Math.abs(lat * 1000) + Math.abs(lon * 1000)) || 7;
+      const animar = c.ceu_animado !== false;
+
+      // O degradê é do CARD inteiro (CSS, custo zero) e os astros vivem numa
+      // FAIXA DE ALTURA FIXA no topo. Com o SVG esticado sobre a altura toda, a
+      // lua acabava em cima da linha de temperatura nos layouts altos — e a
+      // altura do card muda com o layout, então porcentagem não resolve.
+      const desenho = desenharCeu(
+        ceu, sol.elevacao, sol.azimute, fase, animar, semente, noite
+      );
+      const fundoCeu =
+        `<div class="ceu" aria-hidden="true" style="background:linear-gradient(` +
+        `180deg,${paleta[0]},${paleta[1]} 55%,${paleta[2]})">` +
+        `<div class="astros">` +
+        `<svg viewBox="0 0 100 80" preserveAspectRatio="none">${desenho.svg}</svg>` +
+        astroHtml(desenho.astro) +
+        `</div></div>`;
+
+      const alertas = c.mostrar_alertas ? lerAlertas(this._hass) : [];
+      const corpo =
+        c.layout === "faixa"
+          ? this._faixa(d)
+          : c.layout === "alerta"
+            ? ""
+            : c.layout === "semana"
+              ? this._semana()
+              : c.layout === "completo"
+                ? this._topo(d) + this._fita(d) + this._semana() + this._ar()
+                : this._topo(d) + this._fita(d);
+
+      this.shadowRoot.innerHTML = `
+        <style>${ESTILO}</style>
+        <ha-card style="--mw-ceu-fundo:${paleta[0]}">
+          ${fundoCeu}
+          <div class="conteudo">
+            ${corpo}
+            ${alertas
+              .slice(0, 3)
+              .map(
+                (a) =>
+                  `<div class="alerta" style="--cor:${esc(a.cor || "#ffa600")}">` +
+                  `<span aria-hidden="true">⚠️</span><span>` +
+                  `<b>${esc(a.severidade_rotulo || "Aviso")}</b> · ${esc(a.titulo)}. ` +
+                  `${esc(a.descricao || "")}` +
+                  (a.oficial ? ` <i>${esc(a.fonte)}</i>` : " <i>cálculo derivado da previsão</i>") +
+                  `</span></div>`
+              )
+              .join("")}
+          </div>
+        </ha-card>`;
+
+      const abrir = this.shadowRoot.querySelector("button.abrir");
+      if (abrir) {
+        abrir.addEventListener("click", () => {
+          const ev = new Event("hass-more-info", { bubbles: true, composed: true });
+          ev.detail = { entityId: c.entity };
+          this.dispatchEvent(ev);
+        });
+      }
+    }
+
+    _topo(d) {
+      const c = this._config;
+      const conf =
+        d.spread !== null
+          ? `<span class="confianca" title="largura p10–p90 do conjunto de modelos">` +
+            `<span aria-hidden="true">◈</span> ±${fmt(d.spread / 2, 1)} ${d.unidade}` +
+            `${d.spread >= 2.5 ? " · modelos discordam" : ""}</span>`
+          : "";
+      return `
+        <div class="topo">
+          <div>
+            <div class="local">${esc(c.name || d.nome)}</div>
+            <button class="abrir" type="button"
+                    aria-label="${esc(d.nome)}: ${fmt(d.temperatura)} graus, ${esc(TEXTO[d.estado] || d.estado)}">
+              <div class="agora"><span class="n">${fmt(d.temperatura)}</span>
+                   <span class="u">${esc(d.unidade)}</span></div>
+            </button>
+            <div class="cond">${esc(TEXTO[d.estado] || d.estado)}${
+              d.sensacao !== null && Math.abs(d.sensacao - d.temperatura) >= 2
+                ? ` · sensação ${fmt(d.sensacao)}${esc(d.unidade)}`
+                : ""
+            }</div>
+          </div>
+          <div style="text-align:right">
+            <ha-icon icon="${ICONE[d.estado] || "mdi:weather-cloudy"}"
+                     style="--mdc-icon-size:44px"></ha-icon>
+            <div>${conf}</div>
+          </div>
+        </div>
+        <div class="medidas">
+          ${d.umidade !== null ? `<span><ha-icon icon="mdi:water-percent" style="--mdc-icon-size:16px"></ha-icon>${fmt(d.umidade)}%</span>` : ""}
+          ${d.vento !== null ? `<span><ha-icon icon="mdi:weather-windy" style="--mdc-icon-size:16px"></ha-icon>${fmt(d.vento)} km/h</span>` : ""}
+          ${d.pressao !== null ? `<span><ha-icon icon="mdi:gauge" style="--mdc-icon-size:16px"></ha-icon>${fmt(d.pressao, 1)} hPa</span>` : ""}
+          ${d.uv !== null ? `<span><ha-icon icon="mdi:weather-sunny-alert" style="--mdc-icon-size:16px"></ha-icon>UV ${fmt(d.uv, 1)}</span>` : ""}
+        </div>`;
+    }
+
+    _faixa(d) {
+      return `
+        <div class="faixa">
+          <ha-icon icon="${ICONE[d.estado] || "mdi:weather-cloudy"}"
+                   style="--mdc-icon-size:40px"></ha-icon>
+          <div class="agora"><span class="n">${fmt(d.temperatura)}</span>
+               <span class="u">${esc(d.unidade)}</span></div>
+          <div>
+            <div class="local">${esc(this._config.name || d.nome)}</div>
+            <div class="cond">${esc(TEXTO[d.estado] || d.estado)}${
+              d.umidade !== null ? ` · ${fmt(d.umidade)}% de umidade` : ""
+            }</div>
+          </div>
+        </div>`;
+    }
+
+    // A FITA COM A BANDA DE CONFIANÇA — o motivo deste card existir.
+    _fita(d) {
+      const p = (this._previsao || []).slice(0, Math.max(6, this._config.horas));
+      if (p.length < 3) return "";
+      const temps = p.map((h) => num(h.temperature)).filter((t) => t !== null);
+      if (temps.length < 3) return "";
+      const min = Math.min(...temps);
+      const max = Math.max(...temps);
+      const faixa = Math.max(max - min, 1);
+      // Largura do viewBox perto da largura real do card: com `none` e um
+      // viewBox de 100 o texto sai espremido horizontalmente.
+      const L = 300;
+      const H = 92;
+      const x = (i) => (i / (p.length - 1)) * L;
+      const y = (t) => 66 - ((t - min) / faixa) * 40;
+
+      const linha = p
+        .map((h, i) => `${i ? "L" : "M"} ${x(i).toFixed(2)} ${y(num(h.temperature)).toFixed(2)}`)
+        .join(" ");
+
+      // A banda só existe quando a integração publica o spread. Sem ela, o card
+      // desenha a linha e pronto — não inventa incerteza que não mediu.
+      let banda = "";
+      if (this._config.mostrar_banda && d.spread !== null && d.spread > 0.15) {
+        const meia = d.spread / 2;
+        const cima = p
+          .map((h, i) => `${i ? "L" : "M"} ${x(i).toFixed(2)} ${y(num(h.temperature) + meia).toFixed(2)}`)
+          .join(" ");
+        const baixo = p
+          .slice()
+          .reverse()
+          .map((h, j) => {
+            const i = p.length - 1 - j;
+            return `L ${x(i).toFixed(2)} ${y(num(h.temperature) - meia).toFixed(2)}`;
+          })
+          .join(" ");
+        banda = `<path d="${cima} ${baixo} Z" fill="#fff" opacity="0.20"/>`;
+      }
+
+      const marcas = p
+        .map((h, i) => {
+          if (i % Math.ceil(p.length / 6) !== 0) return "";
+          const hora = new Date(h.datetime).getHours();
+          return (
+            `<text x="${x(i).toFixed(2)}" y="87" fill="currentColor" font-size="8" ` +
+            `text-anchor="middle" opacity="0.85">${String(hora).padStart(2, "0")}h</text>` +
+            `<text x="${x(i).toFixed(2)}" y="${(y(num(h.temperature)) - 5).toFixed(2)}" ` +
+            `fill="currentColor" font-size="9" text-anchor="middle" font-weight="600">` +
+            `${fmt(h.temperature)}°</text>`
+          );
+        })
+        .join("");
+
+      const chuva = p
+        .map((h, i) => {
+          const pr = num(h.precipitation_probability);
+          if (pr === null || pr < 15) return "";
+          const alt = (pr / 100) * 14;
+          return (
+            `<rect x="${(x(i) - 2.5).toFixed(2)}" y="${(78 - alt).toFixed(2)}" width="5" ` +
+            `height="${alt.toFixed(2)}" fill="#8fd0ff" opacity="0.75" rx="0.8"/>`
+          );
+        })
+        .join("");
+
+      return `<svg class="fita" viewBox="0 0 ${L} ${H}" preserveAspectRatio="none"
+                   role="img" aria-label="Temperatura das próximas ${p.length} horas${
+                     banda ? ", com a faixa de incerteza dos modelos" : ""
+                   }">
+        ${chuva}${banda}
+        <path d="${linha}" fill="none" stroke="#fff" stroke-width="1.6"
+              stroke-linecap="round" stroke-linejoin="round"/>
+        ${marcas}
+      </svg>`;
+    }
+
+    _semana() {
+      const p = (this._previsao || []).filter((f) => f.templow !== undefined);
+      const dias = p.slice(0, this._config.dias);
+      if (!dias.length) return "";
+      const min = Math.min(...dias.map((d) => num(d.templow)));
+      const max = Math.max(...dias.map((d) => num(d.temperature)));
+      const faixa = Math.max(max - min, 1);
+      const cor = (t) => mwClimateColor("temp", t, 0.85) || "rgba(255,255,255,.7)";
+      return `<div class="semana">${dias
+        .map((d) => {
+          const lo = num(d.templow);
+          const hi = num(d.temperature);
+          const e = ((lo - min) / faixa) * 100;
+          const w = Math.max(((hi - lo) / faixa) * 100, 6);
+          const data = new Date(d.datetime);
+          return `<div class="linha">
+              <span>${DIAS[data.getDay()]} ${String(data.getDate()).padStart(2, "0")}</span>
+              <ha-icon icon="${ICONE[d.condition] || "mdi:weather-cloudy"}"
+                       style="--mdc-icon-size:18px"></ha-icon>
+              <span class="barra"><i style="left:${e.toFixed(1)}%;width:${w.toFixed(1)}%;
+                    background:linear-gradient(90deg,${cor(lo)},${cor(hi)})"></i></span>
+              <span style="opacity:.75;text-align:right">${fmt(lo)}°</span>
+              <span style="font-weight:600;text-align:right">${fmt(hi)}°</span>
+            </div>`;
+        })
+        .join("")}</div>`;
+    }
+
+    _ar() {
+      if (!this._config.mostrar_ar) return "";
+      const ar = lerAr(this._hass);
+      if (ar.pm25 === undefined && ar.aqi === undefined) return "";
+      return `<div class="ar">
+        ${ar.aqi !== undefined ? `<span>Qualidade do ar <b>${fmt(ar.aqi)}</b></span>` : ""}
+        ${ar.pm25 !== undefined ? `<span>PM2.5 <b>${fmt(ar.pm25, 1)}</b> µg/m³${
+          ar.faixa ? ` · ${esc(ar.faixa)}` : ""
+        }</span>` : ""}
+      </div>`;
+    }
+  }
+
+  // ── o card do céu ─────────────────────────────────────────────────────────
+  // Altura zero. Enquanto a view estiver aberta, pinta o cabeçalho, o menu e
+  // (se o dono pedir) o fundo. Ao sair, desfaz tudo.
+  //
+  // TERRENO NOVO, E ISSO ESTÁ DECLARADO: o mw-ha-sidebar já domina o
+  // `ha-sidebar`, mas nenhum componente desta casa tocava a barra superior.
+  // Por isso: fail-open sempre, guarda própria, e nada de MutationObserver
+  // profundo.
+  const SKY_DEFAULTS = {
+    entity: null,
+    superficies: ["cabecalho"],
+    intensidade: 0.85,
+    movimento: true,
+  };
+
+  class SkyCard extends HTMLElement {
+    setConfig(config) {
+      this._config = { ...SKY_DEFAULTS, ...config };
+      if (!this._config.entity) {
+        throw new Error("Informe `entity`: a entidade `weather.` que pinta o céu.");
+      }
+      this.style.display = "none";
+    }
+
+    set hass(hass) {
+      this._hass = hass;
+      this._pintar();
+    }
+
+    getCardSize() {
+      return 0;
+    }
+
+    static getConfigElement() {
+      return document.createElement("mw-leticia-sky-card-editor");
+    }
+
+    static getStubConfig(hass) {
+      const id = Object.keys(hass && hass.states ? hass.states : {}).find((k) =>
+        k.startsWith("weather.")
+      );
+      return { type: "custom:mw-leticia-sky-card", entity: id || "" };
+    }
+
+    connectedCallback() {
+      globalThis.__MW_SKY_ATIVO = (globalThis.__MW_SKY_ATIVO || 0) + 1;
+      this._pintar();
+    }
+
+    disconnectedCallback() {
+      globalThis.__MW_SKY_ATIVO = Math.max((globalThis.__MW_SKY_ATIVO || 1) - 1, 0);
+      if (!globalThis.__MW_SKY_ATIVO) this._despintar();
+    }
+
+    _alvo() {
+      // Travessia direta e curta, saltando por nome. Varredura profunda do
+      // shadow DOM é último recurso: em aparelho lento custa caro e quebra a
+      // cada versão do frontend. O probe cobra isso.
+      try {
+        const raiz = document.querySelector("home-assistant");
+        const main = raiz && raiz.shadowRoot.querySelector("home-assistant-main");
+        return { raiz, main };
+      } catch (_) {
+        return { raiz: null, main: null };
+      }
+    }
+
+    _folha() {
+      let f = document.getElementById("mw-sky-style");
+      if (!f) {
+        f = document.createElement("style");
+        f.id = "mw-sky-style";
+        document.head.appendChild(f);
+      }
+      return f;
+    }
+
+    _pintar() {
+      // FAIL-OPEN: qualquer erro devolve o cabeçalho nativo, em silêncio.
+      try {
+        if (!this._hass || !this._config) return;
+        const d = lerTempo(this._hass, this._config.entity);
+        if (!d) return;
+        const agora = new Date();
+        const lat = num(this._hass.config && this._hass.config.latitude) ?? 0;
+        const lon = num(this._hass.config && this._hass.config.longitude) ?? 0;
+        const sol = posicaoSolar(agora, lat, lon);
+        const ceu = CEU_POR_CONDICAO[d.estado] || "nuvem";
+        const noite =
+          d.estado === "clear-night" ? true : d.estado === "sunny" ? false : null;
+        const paleta = paletaDoCeu(ceu, sol.elevacao, noite);
+        const chave = [d.estado, agora.getHours(), this._config.superficies.join(",")].join("|");
+        if (chave === this._chave) return;
+        this._chave = chave;
+
+        const a = Math.max(0, Math.min(1, num(this._config.intensidade) ?? 0.85));
+        const sup = this._config.superficies || [];
+        const regras = [];
+        // Variáveis de tema: é a rota barata e estável. O app companion não
+        // resolve `var()`, por isso o valor é literal, não referência.
+        regras.push(
+          `:root{--mw-sky-1:${paleta[0]};--mw-sky-2:${paleta[1]};--mw-sky-3:${paleta[2]};}`
+        );
+        if (sup.includes("cabecalho")) {
+          regras.push(
+            `:root{--app-header-background-color:${paleta[1]};` +
+              `--app-header-text-color:#fff;--mdc-theme-primary:#fff;}`
+          );
+          regras.push(
+            `.header, .toolbar, app-header, app-toolbar{` +
+              `background-image:linear-gradient(120deg,${paleta[0]},${paleta[1]} 60%,${paleta[2]});` +
+              `opacity:${a};transition:background-image .8s ease;}`
+          );
+        }
+        if (sup.includes("menu")) {
+          regras.push(
+            `:root{--sidebar-background-color:${paleta[0]};` +
+              `--sidebar-text-color:#e9eef5;--sidebar-icon-color:#c9d6e6;}`
+          );
+        }
+        if (sup.includes("fundo")) {
+          regras.push(
+            `:root{--lovelace-background:linear-gradient(180deg,${paleta[0]},${paleta[2]});}`
+          );
+        }
+        this._folha().textContent = regras.join("\n");
+
+        // O `<style>` global não alcança shadow root. O cabeçalho mora dentro
+        // do `hui-root`, então a mesma regra é injetada lá — quando der.
+        if (sup.includes("cabecalho")) this._injetarNoCabecalho(regras.join("\n"));
+      } catch (_) {
+        /* fail-open: sem céu é melhor que sem cabeçalho */
+      }
+    }
+
+    _injetarNoCabecalho(css) {
+      try {
+        const { main } = this._alvo();
+        if (!main) return;
+        const drawer = main.shadowRoot.querySelector("ha-drawer");
+        const resolver =
+          (drawer && drawer.querySelector("partial-panel-resolver")) ||
+          main.shadowRoot.querySelector("partial-panel-resolver");
+        const painel = resolver && resolver.querySelector("ha-panel-lovelace");
+        const root = painel && painel.shadowRoot && painel.shadowRoot.querySelector("hui-root");
+        const alvo = root && root.shadowRoot;
+        if (!alvo) return;
+        let f = alvo.getElementById && alvo.getElementById("mw-sky-style");
+        if (!f) {
+          f = document.createElement("style");
+          f.id = "mw-sky-style";
+          alvo.appendChild(f);
+        }
+        f.textContent = css;
+      } catch (_) {
+        /* fail-open */
+      }
+    }
+
+    _despintar() {
+      try {
+        const f = document.getElementById("mw-sky-style");
+        if (f) f.remove();
+        const { main } = this._alvo();
+        const root =
+          main &&
+          main.shadowRoot
+            .querySelector("ha-drawer")
+            ?.querySelector("partial-panel-resolver")
+            ?.querySelector("ha-panel-lovelace")?.shadowRoot?.querySelector("hui-root");
+        const interno = root && root.shadowRoot && root.shadowRoot.getElementById("mw-sky-style");
+        if (interno) interno.remove();
+      } catch (_) {
+        /* fail-open */
+      }
+    }
+  }
+
+  // ── editores ──────────────────────────────────────────────────────────────
+  const criarEditor = (nome, esquema, padroes) =>
+    class extends HTMLElement {
+      setConfig(config) {
+        this._config = { ...config };
+        this._renderar();
+      }
+      set hass(hass) {
+        this._hass = hass;
+        if (this._form) this._form.hass = hass;
+      }
+      _renderar() {
+        if (!this._form) {
+          this._form = document.createElement("ha-form");
+          this._form.computeLabel = (f) => LABELS[f.name] || f.name;
+          this._form.addEventListener("value-changed", (ev) => {
+            ev.stopPropagation();
+            const limpo = { type: this._config.type, entity: this._config.entity };
+            for (const [k, v] of Object.entries({ ...ev.detail.value })) {
+              if (v === undefined || v === null || v === "") continue;
+              if (JSON.stringify(v) !== JSON.stringify(padroes[k])) limpo[k] = v;
+            }
+            this.dispatchEvent(
+              new CustomEvent("config-changed", {
+                bubbles: true,
+                composed: true,
+                detail: { config: limpo },
+              })
+            );
+          });
+          this.appendChild(this._form);
+        }
+        if (this._hass) this._form.hass = this._hass;
+        this._form.schema = esquema;
+        const dados = { ...padroes, ...this._config };
+        for (const k of Object.keys(dados)) {
+          if (dados[k] === "" || dados[k] === null) delete dados[k];
+        }
+        this._form.data = dados;
+      }
+    };
+
+  const ESQUEMA_CARD = [
+    { name: "entity", selector: { entity: { domain: "weather" } } },
+    { name: "name", selector: { text: {} } },
+    {
+      name: "layout",
+      selector: {
+        select: {
+          mode: "dropdown",
+          options: [
+            { value: "faixa", label: "Faixa compacta" },
+            { value: "hoje", label: "Hoje (com a fita das horas)" },
+            { value: "semana", label: "Semana" },
+            { value: "completo", label: "Completo" },
+            { value: "alerta", label: "Só a faixa de alertas" },
+          ],
+        },
+      },
+    },
+    { name: "ceu_animado", selector: { boolean: {} } },
+    { name: "mostrar_banda", selector: { boolean: {} } },
+    { name: "mostrar_alertas", selector: { boolean: {} } },
+    { name: "mostrar_ar", selector: { boolean: {} } },
+    { name: "horas", selector: { number: { min: 6, max: 48, step: 1, mode: "box" } } },
+    { name: "dias", selector: { number: { min: 3, max: 16, step: 1, mode: "box" } } },
+  ];
+
+  const ESQUEMA_SKY = [
+    { name: "entity", selector: { entity: { domain: "weather" } } },
+    {
+      name: "superficies",
+      selector: {
+        select: {
+          multiple: true,
+          mode: "list",
+          options: [
+            { value: "cabecalho", label: "Barra superior" },
+            { value: "menu", label: "Menu lateral" },
+            { value: "fundo", label: "Fundo da view (mais caro)" },
+          ],
+        },
+      },
+    },
+    { name: "intensidade", selector: { number: { min: 0.2, max: 1, step: 0.05, mode: "slider" } } },
+    { name: "movimento", selector: { boolean: {} } },
+  ];
+
+  if (!customElements.get("mw-leticia-weather-card")) {
+    customElements.define("mw-leticia-weather-card", WeatherCard);
+    customElements.define(
+      "mw-leticia-weather-card-editor",
+      criarEditor("card", ESQUEMA_CARD, DEFAULTS)
+    );
+    customElements.define("mw-leticia-sky-card", SkyCard);
+    customElements.define(
+      "mw-leticia-sky-card-editor",
+      criarEditor("sky", ESQUEMA_SKY, SKY_DEFAULTS)
+    );
+  }
+
+  window.customCards = window.customCards || [];
+  window.customCards.push(
+    {
+      type: "mw-leticia-weather-card",
+      name: "MW Letícia Weather Card",
+      description:
+        "Tempo com céu vivo e a BANDA DE CONFIANÇA do conjunto de modelos — " +
+        "cinco layouts, do compacto ao completo.",
+      preview: true,
+      documentationURL: "https://github.com/visaodeempresa/mw-ha-leticia-weather-card",
+    },
+    {
+      type: "mw-leticia-sky-card",
+      name: "MW Letícia Sky (céu no cabeçalho)",
+      description:
+        "Card de altura zero: pinta a barra superior, o menu e o fundo com a " +
+        "condição do tempo e a altura real do sol.",
+      preview: false,
+      documentationURL: "https://github.com/visaodeempresa/mw-ha-leticia-weather-card",
+    }
+  );
+
+  console.info(
+    `%c MW-LETICIA-WEATHER-CARD %c ${VERSION} `,
+    "background:#1a1a1a;color:#fdfaf3;font-weight:700;",
+    "background:#8fd0ff;color:#1a1a1a;font-weight:700;"
+  );
+})();

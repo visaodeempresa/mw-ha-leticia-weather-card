@@ -1,0 +1,23 @@
+# A tira de topo, para o hub da casa.
+type: custom:mw-leticia-weather-card
+entity: weather.tempo_aguas_claras
+layout: faixa
+---
+# A tela de clima: hoje com a banda de confiança, e a semana embaixo.
+type: vertical-stack
+cards:
+  - type: custom:mw-leticia-weather-card
+    entity: weather.tempo_aguas_claras
+    layout: hoje
+  - type: custom:mw-leticia-weather-card
+    entity: weather.tempo_aguas_claras
+    layout: semana
+    dias: 10
+---
+# O céu no cabeçalho e no menu. Altura zero: põe em qualquer canto da view.
+type: custom:mw-leticia-sky-card
+entity: weather.tempo_aguas_claras
+superficies:
+  - cabecalho
+  - menu
+intensidade: 0.9
