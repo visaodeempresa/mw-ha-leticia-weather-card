@@ -83,6 +83,171 @@
   };
   // <<< mw-climate-scale v1
 
+  // >>> mw-pressure-scale v1 — fonte canônica: /Volumes/SSD-T1-01/CLAUDE-SSD/IA/lib/mw-pressure-scale/mw-pressure-scale.js
+  // Escala canônica de pressão atmosférica (hPa ao nível do mar) + tendência.
+  // Doc: IA/knowledge/ha-pressao-msl-vs-estacao.md.
+  const MW_PRESSURE_ALPHA = 0.5;
+
+  // Limites SUPERIORES inclusivos, em hPa MSL. Seis faixas.
+  // Os cortes são os do mostrador de barômetro aneroide clássico, que é o que
+  // o morador já sabe ler: abaixo de 1000 chove, perto de 1013 (a atmosfera
+  // padrão) é variável, acima de 1020 firma.
+  const MW_PRESSURE_STOPS = [980, 1000, 1010, 1020, 1030];
+  const MW_PRESSURE_RGB = [
+    "106, 27, 154",   // <=980   — tempestade / ciclone
+    "40, 90, 180",    // <=1000  — chuva
+    "70, 140, 175",   // <=1010  — instável
+    "120, 144, 156",  // <=1020  — variável (1013,25 = atmosfera padrão)
+    "205, 173, 76",   // <=1030  — firme
+    "230, 145, 40",   // >1030   — muito firme, ar seco
+  ];
+  const MW_PRESSURE_LABELS = [
+    "tempestade",
+    "chuva",
+    "instável",
+    "variável",
+    "firme",
+    "muito firme",
+  ];
+
+  // Janela de PLAUSIBILIDADE para pressão MSL: os extremos já observados no
+  // planeta (870 hPa no olho do tufão Tip, 1084 hPa em Agata, Sibéria). Fora
+  // dela é sensor com defeito ou unidade errada, e o consumidor TEM de tratar
+  // `null` como "fora de escala" e avisar — nunca grudar o ponteiro no
+  // batente, que é mentir com desenho.
+  const MW_PRESSURE_PLAUSIVEL = [870, 1085];
+
+  // ATENÇÃO: a janela acima NÃO pega o erro mais comum desta casa. Pressão de
+  // ESTAÇÃO a 1200 m (887,2 hPa, medido em 2026-09-09) cabe dentro dela e
+  // pintaria "tempestade" para sempre. Só a altitude denuncia. Fórmula
+  // barométrica padrão (ISA), a mesma da conversão inversa.
+  const mwPressureEsperadaNaAltitude = (alt) => {
+    const h = Number(alt);
+    if (!Number.isFinite(h)) return null;
+    return 1013.25 * Math.pow(1 - 2.25577e-5 * h, 5.25588);
+  };
+
+  // Verdadeiro quando o número cheira a pressão de estação em vez de MSL: a
+  // casa está alta o bastante para a diferença importar E o valor está na
+  // vizinhança do que a altitude prevê. ±25 hPa cobre a variação real do
+  // tempo (a medição de 2026-09-09 deu 887,2 contra 877,2 previstos pela ISA).
+  const mwPressureParecePressaoDeEstacao = (hpa, alt, tolerancia) => {
+    const v = Number(hpa);
+    const h = Number(alt);
+    if (!Number.isFinite(v) || !Number.isFinite(h) || h < 200) return false;
+    const esperada = mwPressureEsperadaNaAltitude(h);
+    return Math.abs(v - esperada) <= (Number.isFinite(Number(tolerancia)) ? Number(tolerancia) : 25);
+  };
+
+  // Conversão pela unidade DA ENTIDADE, nunca chutada. hPa e mbar são a mesma
+  // coisa; kPa aparece em sensor chinês; inHg em fonte americana; mmHg no
+  // mostrador interno do barômetro da foto.
+  const MW_PRESSURE_PARA_HPA = {
+    hpa: 1, hPa: 1, mbar: 1, mb: 1, millibar: 1,
+    kpa: 10, kPa: 10,
+    pa: 0.01, Pa: 0.01,
+    psi: 68.9476,
+    inhg: 33.8639, inHg: 33.8639, "in": 33.8639, '"hg': 33.8639,
+    mmhg: 1.33322, mmHg: 1.33322, torr: 1.33322,
+  };
+
+  const mwPressureRgba = (triplet, alpha) =>
+    `rgba(${triplet}, ${alpha === undefined || alpha === null ? MW_PRESSURE_ALPHA : alpha})`;
+
+  // Vazio/nulo NÃO é zero (a mesma guarda de mw-level-scale, pelo mesmo motivo:
+  // Number("") é 0, e 0 hPa pintaria roxo de furacão).
+  const mwPressureNum = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const v = Number(value);
+    return Number.isFinite(v) ? v : null;
+  };
+
+  // Normaliza qualquer unidade para hPa. `unit` vem de
+  // attributes.unit_of_measurement — se vier vazia, assume hPa e o consumidor
+  // deve dizer que assumiu.
+  const mwPressureToHpa = (value, unit) => {
+    const v = mwPressureNum(value);
+    if (v === null) return null;
+    const u = String(unit || "hPa").trim();
+    const f = MW_PRESSURE_PARA_HPA[u] ?? MW_PRESSURE_PARA_HPA[u.toLowerCase()];
+    return f === undefined ? null : v * f;
+  };
+
+  // Barometria: reduz a pressão da estação ao nível do mar. `alt` em metros,
+  // `tempC` a temperatura do ar (se faltar, 15 °C da atmosfera padrão — o erro
+  // por 10 °C de engano é ~0,4 % da altitude, aceitável e declarado).
+  const mwPressureToMsl = (hpaEstacao, alt, tempC) => {
+    const p = mwPressureNum(hpaEstacao);
+    const h = mwPressureNum(alt);
+    if (p === null || h === null) return null;
+    const t = mwPressureNum(tempC);
+    const tk = (t === null ? 15 : t) + 273.15;
+    return p * Math.pow(1 - (0.0065 * h) / (tk + 0.0065 * h), -5.257);
+  };
+
+  // Mesma forma de mwClimateScale/mwLevelScale: um caminho de pintura só.
+  const mwPressureScale = (alpha) => ({
+    stops: MW_PRESSURE_STOPS.slice(),
+    colors: MW_PRESSURE_RGB.map((c) => mwPressureRgba(c, alpha)),
+    clamp: null,
+  });
+
+  // Devolve null fora da janela plausível — de propósito (ver acima).
+  const mwPressureIndex = (hpa) => {
+    const v = mwPressureNum(hpa);
+    if (v === null) return null;
+    if (v < MW_PRESSURE_PLAUSIVEL[0] || v > MW_PRESSURE_PLAUSIVEL[1]) return null;
+    const i = MW_PRESSURE_STOPS.findIndex((stop) => v <= stop);
+    return i === -1 ? MW_PRESSURE_STOPS.length : i;
+  };
+
+  const mwPressureColor = (hpa, alpha) => {
+    const i = mwPressureIndex(hpa);
+    return i === null ? null : mwPressureRgba(MW_PRESSURE_RGB[i], alpha);
+  };
+
+  const mwPressureLabel = (hpa) => {
+    const i = mwPressureIndex(hpa);
+    return i === null ? null : MW_PRESSURE_LABELS[i];
+  };
+
+  // --- TENDÊNCIA ---------------------------------------------------------
+  // Variação em 3 h, em hPa. O corte de 1,6 hPa/3 h é o do próprio Zambretti
+  // (é o que separa "subindo" de "estável"); os degraus mais finos existem
+  // para o texto na tela, não para a previsão.
+  const MW_PRESSURE_TREND_STOPS = [0.5, 1.6, 3.5];
+  const MW_PRESSURE_TREND = {
+    estavel:   { label: "estável",           seta: "→", zambretti: "steady" },
+    lenta:     { label: "mudando devagar",   seta: null, zambretti: "steady" },
+    moderada:  { label: "mudando",           seta: null, zambretti: null },
+    rapida:    { label: "mudando rápido",    seta: null, zambretti: null },
+  };
+
+  // Devolve {classe, label, seta, delta, zambretti} — `zambretti` é
+  // "rising" | "steady" | "falling", já com o corte de 1,6 hPa aplicado.
+  const mwPressureTrend = (delta3h) => {
+    const d = mwPressureNum(delta3h);
+    if (d === null) return null;
+    const a = Math.abs(d);
+    const subindo = d > 0;
+    const classe = a <= MW_PRESSURE_TREND_STOPS[0] ? "estavel"
+      : a <= MW_PRESSURE_TREND_STOPS[1] ? "lenta"
+      : a <= MW_PRESSURE_TREND_STOPS[2] ? "moderada" : "rapida";
+    const base = MW_PRESSURE_TREND[classe];
+    const seta = classe === "estavel" ? "→"
+      : classe === "rapida" ? (subindo ? "⇈" : "⇊") : (subindo ? "↑" : "↓");
+    const label = classe === "estavel" ? "estável"
+      : `${base.label} ${subindo ? "para cima" : "para baixo"}`;
+    return {
+      classe,
+      label,
+      seta,
+      delta: d,
+      zambretti: a < 1.6 ? "steady" : (subindo ? "rising" : "falling"),
+    };
+  };
+  // <<< mw-pressure-scale v1
+
   // ── astronomia de bolso ───────────────────────────────────────────────────
   // Sol e lua na posição REAL: é o que separa um céu que reage de um céu que
   // ilustra. Precisão de ~1°, que para desenhar um disco de 12 px é folga.
@@ -392,7 +557,12 @@
       temperatura: num(a.temperature),
       sensacao: num(a.apparent_temperature),
       umidade: num(a.humidity),
-      pressao: num(a.pressure),
+      // Pressão pela escala canônica (regra 190): a unidade vem da entidade,
+      // e a altitude da casa é o que denuncia pressão de ESTAÇÃO. Uma
+      // entidade `weather.` normalmente entrega MSL, mas um card não pode
+      // APOSTAR nisso: a 1200 m a de estação marca ~887 hPa e o número
+      // apareceria como se fosse olho de furacão.
+      pressao: mwPressureToHpa(a.pressure, a.pressure_unit || "hPa"),
       vento: num(a.wind_speed),
       rajada: num(a.wind_gust_speed),
       direcao: num(a.wind_bearing),
@@ -407,6 +577,12 @@
       porModelo: a.por_modelo || null,
       falaAgora: a.fala_agora || null,
       alertas: num(a.alertas),
+      // A faixa de plausibilidade sozinha NÃO pega o engano: 887 hPa é um
+      // valor MSL legítimo. Só a altitude denuncia.
+      pressaoDeEstacao: mwPressureParecePressaoDeEstacao(
+        mwPressureToHpa(a.pressure, a.pressure_unit || "hPa"),
+        num(hass.config && hass.config.elevation) ?? 0
+      ),
     };
   };
 
@@ -636,7 +812,16 @@
         <div class="medidas">
           ${d.umidade !== null ? `<span><ha-icon icon="mdi:water-percent" style="--mdc-icon-size:16px"></ha-icon>${fmt(d.umidade)}%</span>` : ""}
           ${d.vento !== null ? `<span><ha-icon icon="mdi:weather-windy" style="--mdc-icon-size:16px"></ha-icon>${fmt(d.vento)} km/h</span>` : ""}
-          ${d.pressao !== null ? `<span><ha-icon icon="mdi:gauge" style="--mdc-icon-size:16px"></ha-icon>${fmt(d.pressao, 1)} hPa</span>` : ""}
+          ${
+            d.pressao !== null
+              ? `<span title="${esc(mwPressureLabel(d.pressao) || "fora de escala")}">` +
+                `<ha-icon icon="mdi:gauge" style="--mdc-icon-size:16px;color:${
+                  mwPressureColor(d.pressao, 1) || "currentColor"
+                }"></ha-icon>${fmt(d.pressao, 1)} hPa${
+                  d.pressaoDeEstacao ? " (estação)" : ""
+                }</span>`
+              : ""
+          }
           ${d.uv !== null ? `<span><ha-icon icon="mdi:weather-sunny-alert" style="--mdc-icon-size:16px"></ha-icon>UV ${fmt(d.uv, 1)}</span>` : ""}
         </div>`;
     }

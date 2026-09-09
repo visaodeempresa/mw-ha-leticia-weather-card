@@ -228,6 +228,21 @@ check("alerta derivado se anuncia como derivado",
   /cálculo derivado da previsão/.test(src));
 check("usa a escala canônica de temperatura (regra 40)",
   /mw-climate-scale v1/.test(src) && /mwClimateColor\("temp"/.test(src));
+check(
+  "usa a escala canônica de PRESSÃO (regra 190)",
+  /mw-pressure-scale v1/.test(src) && /mwPressureColor\(/.test(src),
+  "pintar pressão com cor própria cria uma segunda verdade"
+);
+check(
+  "denuncia pressão de estação em vez de desenhar errado",
+  /mwPressureParecePressaoDeEstacao\(/.test(src) && /\(estação\)/.test(src),
+  "a 1200 m a pressão de estação é ~887 hPa e a faixa sozinha não pega"
+);
+check(
+  "a unidade de pressão vem da entidade",
+  /mwPressureToHpa\(a\.pressure/.test(src),
+  "chutar hPa quebra quem publica inHg"
+);
 
 console.log(fails ? `\n${fails} FALHA(S)` : "\ntudo verde");
 process.exit(fails ? 1 : 0);

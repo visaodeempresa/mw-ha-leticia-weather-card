@@ -6,7 +6,7 @@ description: Mexer no céu que pinta a barra superior, o menu lateral e o fundo 
 # Céu no cabeçalho e card de tempo
 
 Dois tipos num arquivo só. A fábrica geral está em
-[`mw-clima`](../mw-clima/SKILL.md).
+**`mw-clima`** (canônica no harness, publicada em `~/.claude/skills`).
 
 ## Pré-condições
 
