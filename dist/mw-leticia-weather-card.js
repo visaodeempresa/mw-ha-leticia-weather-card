@@ -21,7 +21,7 @@
  */
 (() => {
   "use strict";
-  const VERSION = "0.1.0";
+  const VERSION = "0.2.0";
 
   // >>> mw-climate-scale v1 — fonte canônica: /Volumes/SSD-T1-01/CLAUDE-SSD/IA/lib/mw-climate-scale/mw-climate-scale.js
   // Escala canônica de cor por temperatura (°C) e umidade relativa (%).
