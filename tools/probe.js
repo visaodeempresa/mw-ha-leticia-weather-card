@@ -193,9 +193,24 @@ check("anima só opacity e transform (a regra da casa)",
   !/@keyframes[^}]*\b(width|height|top|left|margin)\s*:/.test(src));
 check("respeita prefers-reduced-motion",
   /prefers-reduced-motion/.test(src) && /animation:\s*none\s*!important/.test(src));
-check("sem laço de animação em JS: quem anima é o CSS",
-  !/requestAnimationFrame/.test(src) && !/setInterval/.test(src),
-  "aba oculta pausa animação de CSS sozinha; timer não");
+check(
+  "sem laço de animação em JS: quem anima é o CSS",
+  !/requestAnimationFrame/.test(src),
+  "aba oculta pausa animação de CSS sozinha; rAF não"
+);
+check(
+  "nenhum timer rápido: o céu muda com a HORA, não com o quadro",
+  (() => {
+    // Só sobrevive timer de 60 s para cima, e guardado por document.hidden.
+    const ms = [...src.matchAll(/setInterval\([\s\S]{0,400}?,\s*([^)]+)\)/g)].map(
+      (m) => m[1]
+    );
+    const valor = (e) =>
+      Function(`"use strict";return (${e})`)() || Number.POSITIVE_INFINITY;
+    return ms.every((e) => valor(e) >= 60000) && /document\.hidden/.test(src);
+  })(),
+  "timer curto é laço de animação com outro nome"
+);
 check(
   "sem varredura profunda do shadow DOM",
   !/queryDeep/.test(src) && !/while\s*\([^)]*shadowRoot/.test(src),
@@ -211,14 +226,58 @@ check(
 check("o céu falha para fora (fail-open)",
   (src.match(/catch \(_\)/g) || []).length >= 4,
   "sem céu é melhor que sem cabeçalho");
-check("guarda própria, não colide com o MW Sidebar",
-  /__MW_SKY_ATIVO/.test(src) && !/__MW_SIDEBAR/.test(src));
+check(
+  "guarda própria, não colide com o MW Sidebar",
+  /__MW_SKY\b/.test(src) && !/__MW_SIDEBAR/.test(src)
+);
+check(
+  "o céu NÃO depende do card estar na tela",
+  /location-changed/.test(src) &&
+    /frontend\/set_user_data/.test(src) &&
+    /globalThis\.__MW_SKY/.test(src),
+  "preso ao card, a tonalidade some ao navegar e a Home padrão nunca pinta"
+);
+check(
+  "reinjeta no hui-root a cada navegação",
+  /huiRoot\(\)/.test(src) && /popstate/.test(src),
+  "o hui-root é reconstruído na troca de painel e leva o style junto"
+);
+check(
+  "as telas alvo são configuráveis na tela",
+  /lovelace\/dashboards\/list/.test(src) && /"lovelace", label: "Home padrão"/.test(src),
+  "escolher onde o céu vale é do dono, não do código"
+);
 check("cancela a assinatura de previsão ao sair da tela",
   /disconnectedCallback/.test(src) && /_cancelar/.test(src),
   "assinatura pendurada é vazamento");
 check("escapa texto que vem do estado",
   /const esc = /.test(src) && /esc\(a\.titulo\)/.test(src),
   "título de alerta é texto de terceiro; entra escapado");
+
+console.log("legibilidade e repintura (achados do inspetor de design):");
+check(
+  "o véu do céu protege MAIS embaixo, onde o céu clareia",
+  (() => {
+    const m = src.match(/rgba\(8,12,22,\.(\d+)\)[^;]*rgba\(8,12,22,\.(\d+)\)/);
+    return !!m && Number(m[2]) >= Number(m[1]);
+  })(),
+  "véu forte no topo e fraco no meio abandona o texto no céu claro do meio-dia"
+);
+check(
+  "o astro fica preso na faixa de cima",
+  /Math\.min\(Math\.max\(\(y \/ 80\) \* 118, 8\), 34\)/.test(src),
+  "solto, o disco do sol desce até 91 px e atropela a linha de temperatura"
+);
+check(
+  "o astro não invade a coluna do ícone de condição",
+  /Math\.min\(Math\.max\(x, 8\), 56\)/.test(src),
+  "sol desenhado ao lado do ícone de sol vira dois sóis"
+);
+check(
+  "a chave de repintura inclui alertas e ar",
+  /avisos\.map\(/.test(src) && /ar\.aqi/.test(src),
+  "sem isso o card fica mudo justamente quando chega um aviso de tempestade"
+);
 
 console.log("honestidade:");
 check("a banda só aparece quando há spread medido",

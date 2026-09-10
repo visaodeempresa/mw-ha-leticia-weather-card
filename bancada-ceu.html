@@ -1,0 +1,140 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Bancada do céu — navegação</title>
+<style>
+  body { margin:0; font:14px/1.45 -apple-system,system-ui,sans-serif; background:#eef0f3; }
+  .barra { padding:10px 14px; background:#fff; border-bottom:1px solid #dcdfe3;
+           display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  button { font:inherit; padding:5px 10px; border-radius:8px; cursor:pointer;
+           border:1px solid #ccd; background:#fff; }
+  #placar { padding:14px; white-space:pre-wrap; font:12px/1.5 ui-monospace,monospace; }
+  .ok { color:#1b7f32; font-weight:700 } .mau { color:#c02626; font-weight:700 }
+  /* dublê do cabeçalho do HA, para dar o que pintar */
+  .header { height:56px; background:#03a9f4; color:#fff; display:flex;
+            align-items:center; padding:0 16px; font-weight:600; }
+</style>
+<div class="barra">
+  <b>bancada do céu</b>
+  <button onclick="navegar('lovelace')">ir para a Home padrão</button>
+  <button onclick="navegar('clima-3-0')">ir para /clima-3-0</button>
+  <button onclick="navegar('home-9-0')">ir para /home-9-0</button>
+  <button onclick="trocarPainel()">reconstruir o hui-root (troca de painel)</button>
+  <button onclick="rodar()">rodar as asserções</button>
+</div>
+<div id="placar">carregando…</div>
+
+<script>
+  // ── dublê MÍNIMO da árvore do HA: home-assistant → main → drawer →
+  //    partial-panel-resolver → ha-panel-lovelace → hui-root(shadow)
+  const mk = (tag) => document.createElement(tag);
+  function montarArvore() {
+    const ha = mk("home-assistant");
+    const sr = ha.attachShadow({ mode: "open" });
+    const main = mk("home-assistant-main");
+    const msr = main.attachShadow({ mode: "open" });
+    const drawer = mk("ha-drawer");
+    const resolver = mk("partial-panel-resolver");
+    const painel = mk("ha-panel-lovelace");
+    const psr = painel.attachShadow({ mode: "open" });
+    const root = mk("hui-root");
+    const rsr = root.attachShadow({ mode: "open" });
+    rsr.innerHTML = '<div class="header">cabeçalho do HA (dublê)</div>';
+    psr.appendChild(root); resolver.appendChild(painel);
+    drawer.appendChild(resolver); msr.appendChild(drawer); sr.appendChild(main);
+    document.body.appendChild(ha);
+    ha.hass = hass();
+    return ha;
+  }
+  const guardado = {};
+  const hass = () => ({
+    config: { latitude: -15.83985, longitude: -48.03618, elevation: 1200 },
+    connection: {
+      sendMessagePromise: async (m) => {
+        if (m.type === "frontend/get_user_data") return { value: guardado[m.key] || null };
+        if (m.type === "frontend/set_user_data") { guardado[m.key] = m.value; return {}; }
+        if (m.type === "lovelace/dashboards/list")
+          return [{ url_path: "clima-3-0", title: "CLIMA 3.0" },
+                  { url_path: "home-9-0", title: "REINO DO DENDÊ" }];
+        return {};
+      },
+    },
+    states: {
+      "weather.casa": { state: "clear-night", attributes: {
+        friendly_name: "Águas Claras", temperature: 19.1, humidity: 83,
+        pressure: 1019, temperature_unit: "°C" } },
+    },
+  });
+  let ha = montarArvore();
+  function navegar(p) {
+    history.pushState({}, "", "/" + p + "/0");
+    window.dispatchEvent(new CustomEvent("location-changed"));
+  }
+  function trocarPainel() {
+    // é isto que o HA faz e que apagava o <style>: refaz o hui-root inteiro
+    ha.remove(); ha = montarArvore();
+    window.dispatchEvent(new CustomEvent("location-changed"));
+  }
+</script>
+<script src="dist/mw-leticia-weather-card.js"></script>
+<script>
+  const linhas = [];
+  const diz = (nome, ok, extra="") =>
+    linhas.push(`${ok ? "  ok  " : "  FAIL"} ${nome}${extra ? "  → " + extra : ""}`);
+  const pintado = () => {
+    const g = !!document.head.querySelector("style#mw-sky-style")?.textContent;
+    const root = globalThis.__MW_SKY?.huiRoot?.();
+    const dentro = !!root?.querySelector("style#mw-sky-style")?.textContent;
+    return { g, dentro };
+  };
+  const espera = (ms) => new Promise(r => setTimeout(r, ms));
+
+  async function rodar() {
+    linhas.length = 0;
+    const sky = globalThis.__MW_SKY;
+    diz("o pintor existe como singleton do módulo", !!sky);
+
+    // configura como o card faria
+    await sky.guardar({ entity: "weather.casa", ativo: true,
+                        superficies: ["cabecalho", "menu"], escopo: "todos" });
+    await espera(120);
+    let p = pintado();
+    diz("pinta a folha global", p.g);
+    diz("pinta dentro do hui-root", p.dentro);
+
+    navegar("home-9-0"); await espera(200);
+    p = pintado();
+    diz("SOBREVIVE à navegação entre dashboards", p.g && p.dentro,
+        `global=${p.g} hui-root=${p.dentro}`);
+
+    trocarPainel(); await espera(300);
+    p = pintado();
+    diz("REINJETA depois do hui-root ser reconstruído", p.dentro,
+        "era exatamente aqui que a tonalidade sumia");
+
+    navegar("lovelace"); await espera(200);
+    p = pintado();
+    diz("pinta a HOME PADRÃO sem card nenhum na tela", p.g && p.dentro);
+
+    // escopo por lista
+    await sky.guardar({ entity: "weather.casa", ativo: true,
+                        superficies: ["cabecalho"], escopo: "lista",
+                        dashboards: ["clima-3-0"] });
+    navegar("lovelace"); await espera(200);
+    diz("fora da lista, não pinta", !pintado().g);
+    navegar("clima-3-0"); await espera(200);
+    diz("dentro da lista, pinta", pintado().g);
+
+    // desligar
+    await sky.guardar({ entity: "weather.casa", ativo: false, escopo: "todos" });
+    await espera(150);
+    diz("a chave desliga tudo", !pintado().g && !pintado().dentro);
+
+    const falhas = linhas.filter(l => l.includes("FAIL")).length;
+    document.getElementById("placar").innerHTML =
+      linhas.map(l => l.replace(/^( {2}ok)/, '<span class="ok">$1</span>')
+                      .replace(/^( {2}FAIL)/, '<span class="mau">$1</span>')).join("\n") +
+      `\n\n${falhas ? `<span class="mau">${falhas} FALHA(S)</span>` : '<span class="ok">tudo verde</span>'}`;
+    document.title = falhas ? `FAIL (${falhas})` : "PASS";
+  }
+  setTimeout(rodar, 900);
+</script>

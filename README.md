@@ -57,10 +57,24 @@ o compositor cuida deles na GPU, a aba oculta pausa sozinha e
 type: custom:mw-leticia-sky-card
 entity: weather.tempo_aguas_claras
 superficies: [cabecalho, menu]
+escopo: todos          # ou `lista`, com `dashboards: [lovelace, clima-3-0]`
 ```
 
-Card de altura zero: enquanto a view estiver aberta, pinta; ao sair, desfaz.
-Nasce **desligado** — só existe onde alguém o colocar.
+**O card não pinta: ele configura.** Quem pinta é um pintor único do módulo,
+guiado por uma configuração guardada no seu usuário. Isso importa por dois
+motivos que só aparecem usando:
+
+1. **A tonalidade não some ao navegar.** O `hui-root` é reconstruído a cada
+   troca de painel e levava o `<style>` junto; agora o pintor reinjeta.
+2. **Vale na Home padrão e em qualquer dashboard**, mesmo sem o card na tela.
+   Como este arquivo é recurso do Lovelace, ele carrega em todas.
+
+`escopo: todos` pinta o Home Assistant inteiro enquanto você estiver num
+dashboard. `escopo: lista` pinta só nas telas escolhidas — e a lista sai do
+próprio HA no editor visual, com a **Home padrão** no topo.
+
+A chave `ativo` desliga tudo. **Remover o card não apaga a configuração**: ela
+é do usuário, não da view.
 
 Duas rotas, nesta ordem: primeiro as variáveis de tema
 (`--app-header-background-color`, `--sidebar-background-color`), que são baratas

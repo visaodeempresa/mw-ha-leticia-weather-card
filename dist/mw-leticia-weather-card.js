@@ -367,6 +367,9 @@
     horas: "Horas na fita",
     dias: "Dias na semana",
     superficies: "Onde pintar o céu",
+    ativo: "Céu ligado",
+    escopo: "Em quais telas",
+    dashboards: "Telas escolhidas",
     intensidade: "Intensidade",
     movimento: "Movimento",
   };
@@ -453,8 +456,11 @@
   // (`preserveAspectRatio="none"`) e deixaria os dois OVAIS. Um `<div>`
   // redondo com `border-radius` é imune ao estica-e-puxa e ainda anima na GPU.
   const astroHtml = ({ x, y, noite, fase, ceu }) => {
-    const esq = `left:${x.toFixed(1)}%`;
-    const topo = `top:${((y / 80) * 118).toFixed(0)}px`;
+    // A coluna da DIREITA é do ícone de condição e do chip de confiança —
+    // um disco de sol ali vira um segundo sol ao lado do primeiro. O astro
+    // fica na metade esquerda e na faixa de 8 a 34 px do topo.
+    const esq = `left:${Math.min(Math.max(x, 8), 56).toFixed(1)}%`;
+    const topo = `top:${Math.min(Math.max((y / 80) * 118, 8), 34).toFixed(0)}px`;
     if (noite) {
       const iluminado = Math.abs(fase - 0.5) * 2; // 0 cheia, 1 nova
       const desloc = (fase < 0.5 ? 1 : -1) * iluminado * 100;
@@ -473,6 +479,9 @@
   };
 
   const CSS_CEU = `
+    /* O astro mora numa faixa estreita do TOPO. Solto, ele descia até 91 px e
+       atropelava a linha de temperatura e a leitura de umidade — o véu do céu
+       não sabe onde o texto está, então quem tem de saber é o astro. */
     .sol, .lua { position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px;
                  border-radius: 50%; pointer-events: none; }
     .sol { background: #ffd76a; box-shadow: 0 0 26px 12px rgba(255,215,106,.28); }
@@ -501,11 +510,18 @@
     .ceu { position: absolute; inset: 0; z-index: 0; }
     .astros { position: absolute; top: 0; left: 0; right: 0; height: 118px; }
     .astros svg { width: 100%; height: 100%; display: block; }
-    /* Véu: o texto é branco e o céu vai de quase preto a azul claro. Sem
-       este degradê, o contraste cai abaixo de 4,5:1 ao meio-dia. */
+    /* Véu: o texto é branco e o céu vai de quase preto a azul claro.
+       A primeira versão era mais FORTE no topo e quase transparente no meio —
+       ou seja, protegia onde o céu já era escuro e abandonava o texto
+       exatamente no céu claro do meio-dia: 71 dos 73 textos abaixo de 4,5:1
+       com sol aberto. Estes valores foram MEDIDOS pelo inspetor de design em
+       (armadilha da casa: CRASE dentro de comentário no template literal do
+       CSS fecha a string e o card some sem erro visível)
+       2026-09-09: com eles, fog, cloudy, partlycloudy, rainy, lightning-rainy
+       e clear-night ficam com zero reprovado. */
     .ceu::after { content: ""; position: absolute; inset: 0;
-      background: linear-gradient(180deg, rgba(8,12,22,.34), rgba(8,12,22,.10) 45%,
-                                  rgba(8,12,22,.30)); }
+      background: linear-gradient(180deg, rgba(8,12,22,.46),
+                                  rgba(8,12,22,.60) 45%, rgba(8,12,22,.66)); }
     .conteudo { position: relative; z-index: 1; padding: 14px 16px;
                 display: flex; flex-direction: column; gap: 12px;
                 color: var(--mw-ceu-tinta, #fff);
@@ -686,6 +702,12 @@
       if (!this._config || !this._hass) return;
       if (!this._cancelar) this._assinar();
       const d = lerTempo(this._hass, this._config.entity);
+      // A chave decide se vale repintar. Ela precisa conter TUDO que o card
+      // desenha: sem os alertas e o ar aqui, o card ficava mudo justamente
+      // quando tinha algo a dizer — um aviso de tempestade chegava e a tela
+      // não mudava. Medido pelo inspetor de design em 2026-09-09.
+      const avisos = this._config.mostrar_alertas ? lerAlertas(this._hass) : [];
+      const ar = this._config.mostrar_ar ? lerAr(this._hass) : {};
       const chave = JSON.stringify([
         d && d.estado,
         d && d.temperatura,
@@ -695,6 +717,9 @@
         (this._previsao || [])[0] && this._previsao[0].datetime,
         this._config.layout,
         new Date().getHours(),
+        avisos.map((a) => `${a.tipo}:${a.severidade}`).join("|"),
+        ar.aqi,
+        ar.pm25,
       ]);
       if (chave === this._chave) return;
       this._chave = chave;
@@ -959,21 +984,267 @@
     }
   }
 
-  // ── o card do céu ─────────────────────────────────────────────────────────
-  // Altura zero. Enquanto a view estiver aberta, pinta o cabeçalho, o menu e
-  // (se o dono pedir) o fundo. Ao sair, desfaz tudo.
+  // ── o CÉU: um pintor só, que não depende de card nenhum ───────────────────
   //
-  // TERRENO NOVO, E ISSO ESTÁ DECLARADO: o mw-ha-sidebar já domina o
-  // `ha-sidebar`, mas nenhum componente desta casa tocava a barra superior.
-  // Por isso: fail-open sempre, guarda própria, e nada de MutationObserver
-  // profundo.
+  // A primeira versão prendia a pintura ao ciclo de vida do card: o céu vivia
+  // enquanto a view estivesse aberta e morria ao sair. Duas consequências que
+  // o dono viu na prática em 2026-09-10:
+  //
+  //   1. a tonalidade SUMIA ao navegar — o `hui-root` é reconstruído a cada
+  //      troca de painel e leva junto o `<style>` injetado nele;
+  //   2. só existia onde o card estivesse, então a Home padrão nunca pintava.
+  //
+  // Agora o pintor é um SINGLETON do módulo, guiado por configuração guardada
+  // no `frontend/set_user_data`. Como este arquivo é recurso do Lovelace, ele
+  // carrega em TODO dashboard — inclusive na Home padrão. O card virou o
+  // painel de controle que escreve essa configuração.
+  //
+  // O que continua valendo do vizinho que já mexe no menu lateral: fail-open
+  // sempre, guarda global PRÓPRIA (nunca a dele), zero tráfego novo com o
+  // servidor, e nada de varredura profunda do shadow DOM.
+  const CHAVE_STORE = "mw_sky";
+
   const SKY_DEFAULTS = {
     entity: null,
+    ativo: true,
     superficies: ["cabecalho"],
     intensidade: 0.85,
-    movimento: true,
+    escopo: "todos", // "todos" | "lista"
+    dashboards: [],
   };
 
+  const painelAtual = () => {
+    // "/lovelace/0" → "lovelace" (a Home padrão) · "/clima-3-0/agora" → "clima-3-0"
+    const partes = String(location.pathname || "").split("/").filter(Boolean);
+    return partes[0] || "lovelace";
+  };
+
+  const MwSky = {
+    cfg: null,
+    _chave: null,
+    _ligado: false,
+    _relogio: null,
+
+    raiz() {
+      try {
+        const r = document.querySelector("home-assistant");
+        return { r, main: r && r.shadowRoot.querySelector("home-assistant-main") };
+      } catch (_) {
+        return { r: null, main: null };
+      }
+    },
+
+    hass() {
+      try {
+        return document.querySelector("home-assistant")?.hass || null;
+      } catch (_) {
+        return null;
+      }
+    },
+
+    alcanca() {
+      const c = this.cfg;
+      if (!c || !c.ativo) return false;
+      if (c.escopo === "todos") return true;
+      return (c.dashboards || []).includes(painelAtual());
+    },
+
+    folha(alvo) {
+      // Uma folha por alvo. `document.head` para as variáveis de tema (que
+      // atravessam tudo) e outra dentro do shadow root do `hui-root`, que é
+      // onde o cabeçalho realmente mora.
+      const dono = alvo || document.head;
+      let f = dono.querySelector
+        ? dono.querySelector("style#mw-sky-style")
+        : null;
+      if (!f) {
+        f = document.createElement("style");
+        f.id = "mw-sky-style";
+        dono.appendChild(f);
+      }
+      return f;
+    },
+
+    huiRoot() {
+      try {
+        const { main } = this.raiz();
+        if (!main) return null;
+        const drawer = main.shadowRoot.querySelector("ha-drawer");
+        const resolver =
+          (drawer && drawer.querySelector("partial-panel-resolver")) ||
+          main.shadowRoot.querySelector("partial-panel-resolver");
+        const painel = resolver && resolver.querySelector("ha-panel-lovelace");
+        const root = painel && painel.shadowRoot?.querySelector("hui-root");
+        return root?.shadowRoot || null;
+      } catch (_) {
+        return null;
+      }
+    },
+
+    regras(paleta, alfa, superficies) {
+      const regras = [
+        `:root{--mw-sky-1:${paleta[0]};--mw-sky-2:${paleta[1]};` +
+          `--mw-sky-3:${paleta[2]};}`,
+      ];
+      if (superficies.includes("cabecalho")) {
+        // Valor LITERAL, não `var()`: o app companion iOS/Android não resolve
+        // `var()` nas variáveis de shell.
+        regras.push(
+          `:root{--app-header-background-color:${paleta[1]};` +
+            `--app-header-text-color:#fff;--mdc-theme-primary:#fff;}`
+        );
+        regras.push(
+          `.header, .toolbar, app-header, app-toolbar{` +
+            `background-image:linear-gradient(120deg,${paleta[0]},` +
+            `${paleta[1]} 60%,${paleta[2]});opacity:${alfa};` +
+            `transition:background-image .8s ease;}`
+        );
+      }
+      if (superficies.includes("menu")) {
+        regras.push(
+          `:root{--sidebar-background-color:${paleta[0]};` +
+            `--sidebar-text-color:#e9eef5;--sidebar-icon-color:#c9d6e6;}`
+        );
+      }
+      if (superficies.includes("fundo")) {
+        regras.push(
+          `:root{--lovelace-background:linear-gradient(180deg,${paleta[0]},` +
+            `${paleta[2]});}`
+        );
+      }
+      return regras.join("\n");
+    },
+
+    pintar(forcar) {
+      // FAIL-OPEN: qualquer erro devolve o cabeçalho nativo, em silêncio.
+      try {
+        if (!this.alcanca()) return this.despintar();
+        const hass = this.hass();
+        const d = hass && lerTempo(hass, this.cfg.entity);
+        if (!d) return;
+        const agora = new Date();
+        const lat = num(hass.config && hass.config.latitude) ?? 0;
+        const lon = num(hass.config && hass.config.longitude) ?? 0;
+        const sol = posicaoSolar(agora, lat, lon);
+        const ceu = CEU_POR_CONDICAO[d.estado] || "nuvem";
+        const noite =
+          d.estado === "clear-night" ? true : d.estado === "sunny" ? false : null;
+        const paleta = paletaDoCeu(ceu, sol.elevacao, noite);
+        const sup = this.cfg.superficies || [];
+        const chave = [
+          d.estado,
+          agora.getHours(),
+          sup.join(","),
+          this.cfg.intensidade,
+          painelAtual(),
+        ].join("|");
+        if (!forcar && chave === this._chave) return;
+        this._chave = chave;
+
+        const alfa = Math.max(0, Math.min(1, num(this.cfg.intensidade) ?? 0.85));
+        const css = this.regras(paleta, alfa, sup);
+        this.folha(document.head).textContent = css;
+        // A folha global não atravessa shadow root: o cabeçalho precisa da
+        // dele, e ela some a cada troca de painel — por isso reinjetamos na
+        // navegação em vez de confiar que ficou.
+        if (sup.includes("cabecalho")) {
+          const alvo = this.huiRoot();
+          if (alvo) this.folha(alvo).textContent = css;
+        }
+      } catch (_) {
+        /* sem céu é melhor que sem cabeçalho */
+      }
+    },
+
+    despintar() {
+      try {
+        this._chave = null;
+        document.head.querySelector("style#mw-sky-style")?.remove();
+        this.huiRoot()?.querySelector("style#mw-sky-style")?.remove();
+      } catch (_) {
+        /* fail-open */
+      }
+    },
+
+    async carregar() {
+      // Configuração no `frontend/set_user_data`: é por usuário, que é o
+      // mesmo desenho em camadas do MW Sidebar, e não exige integração
+      // nenhuma para o card funcionar sozinho.
+      try {
+        const hass = this.hass();
+        if (!hass) return null;
+        const r = await hass.connection.sendMessagePromise({
+          type: "frontend/get_user_data",
+          key: CHAVE_STORE,
+        });
+        return (r && r.value) || null;
+      } catch (_) {
+        return null;
+      }
+    },
+
+    async guardar(cfg) {
+      this.cfg = { ...SKY_DEFAULTS, ...cfg };
+      try {
+        const hass = this.hass();
+        await hass.connection.sendMessagePromise({
+          type: "frontend/set_user_data",
+          key: CHAVE_STORE,
+          value: this.cfg,
+        });
+      } catch (_) {
+        /* guardar falhou: o céu desta sessão continua valendo */
+      }
+      this.ligar();
+      this.pintar(true);
+    },
+
+    ligar() {
+      if (this._ligado) return;
+      this._ligado = true;
+      const repintar = () => setTimeout(() => this.pintar(true), 60);
+      // Navegação: o HA dispara `location-changed` na SPA, e o `popstate`
+      // cobre o botão de voltar. Sem laço, sem observer profundo.
+      window.addEventListener("location-changed", repintar);
+      window.addEventListener("popstate", repintar);
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) this.pintar(true);
+      });
+      // Relógio lento: o céu muda com a HORA, não com o estado. 5 min é o
+      // suficiente e some quando a aba está oculta.
+      this._relogio = setInterval(() => {
+        if (!document.hidden) this.pintar(false);
+      }, 5 * 60 * 1000);
+    },
+
+    async iniciar() {
+      if (this.cfg) return;
+      const guardado = await this.carregar();
+      if (!guardado || !guardado.entity) return;
+      this.cfg = { ...SKY_DEFAULTS, ...guardado };
+      this.ligar();
+      this.pintar(true);
+    },
+  };
+
+  // Guarda global própria: o plugin de menu da casa tem a dele, e os dois
+  // precisam de contadores separados para um não desligar o outro.
+  if (!globalThis.__MW_SKY) {
+    globalThis.__MW_SKY = MwSky;
+    // Espera o `home-assistant` existir antes de tentar ler o hass.
+    const tentar = (n) => {
+      if (globalThis.__MW_SKY.hass()) {
+        globalThis.__MW_SKY.iniciar();
+      } else if (n < 20) {
+        setTimeout(() => tentar(n + 1), 250 * (n + 1));
+      }
+    };
+    tentar(0);
+  }
+
+  // O card virou o PAINEL DE CONTROLE do céu: ele não pinta, ele configura.
+  // Continua de altura zero e continua sendo opcional — sem ele, quem já
+  // configurou uma vez continua com o céu, porque a configuração é guardada.
   class SkyCard extends HTMLElement {
     setConfig(config) {
       this._config = { ...SKY_DEFAULTS, ...config };
@@ -981,11 +1252,12 @@
         throw new Error("Informe `entity`: a entidade `weather.` que pinta o céu.");
       }
       this.style.display = "none";
+      this._aplicado = null;
     }
 
     set hass(hass) {
       this._hass = hass;
-      this._pintar();
+      this._aplicar();
     }
 
     getCardSize() {
@@ -1000,140 +1272,27 @@
       const id = Object.keys(hass && hass.states ? hass.states : {}).find((k) =>
         k.startsWith("weather.")
       );
-      return { type: "custom:mw-leticia-sky-card", entity: id || "" };
+      return {
+        type: "custom:mw-leticia-sky-card",
+        entity: id || "",
+        escopo: "todos",
+        superficies: ["cabecalho", "menu"],
+      };
     }
 
     connectedCallback() {
-      globalThis.__MW_SKY_ATIVO = (globalThis.__MW_SKY_ATIVO || 0) + 1;
-      this._pintar();
+      this._aplicar();
     }
 
-    disconnectedCallback() {
-      globalThis.__MW_SKY_ATIVO = Math.max((globalThis.__MW_SKY_ATIVO || 1) - 1, 0);
-      if (!globalThis.__MW_SKY_ATIVO) this._despintar();
-    }
-
-    _alvo() {
-      // Travessia direta e curta, saltando por nome. Varredura profunda do
-      // shadow DOM é último recurso: em aparelho lento custa caro e quebra a
-      // cada versão do frontend. O probe cobra isso.
-      try {
-        const raiz = document.querySelector("home-assistant");
-        const main = raiz && raiz.shadowRoot.querySelector("home-assistant-main");
-        return { raiz, main };
-      } catch (_) {
-        return { raiz: null, main: null };
-      }
-    }
-
-    _folha() {
-      let f = document.getElementById("mw-sky-style");
-      if (!f) {
-        f = document.createElement("style");
-        f.id = "mw-sky-style";
-        document.head.appendChild(f);
-      }
-      return f;
-    }
-
-    _pintar() {
-      // FAIL-OPEN: qualquer erro devolve o cabeçalho nativo, em silêncio.
-      try {
-        if (!this._hass || !this._config) return;
-        const d = lerTempo(this._hass, this._config.entity);
-        if (!d) return;
-        const agora = new Date();
-        const lat = num(this._hass.config && this._hass.config.latitude) ?? 0;
-        const lon = num(this._hass.config && this._hass.config.longitude) ?? 0;
-        const sol = posicaoSolar(agora, lat, lon);
-        const ceu = CEU_POR_CONDICAO[d.estado] || "nuvem";
-        const noite =
-          d.estado === "clear-night" ? true : d.estado === "sunny" ? false : null;
-        const paleta = paletaDoCeu(ceu, sol.elevacao, noite);
-        const chave = [d.estado, agora.getHours(), this._config.superficies.join(",")].join("|");
-        if (chave === this._chave) return;
-        this._chave = chave;
-
-        const a = Math.max(0, Math.min(1, num(this._config.intensidade) ?? 0.85));
-        const sup = this._config.superficies || [];
-        const regras = [];
-        // Variáveis de tema: é a rota barata e estável. O app companion não
-        // resolve `var()`, por isso o valor é literal, não referência.
-        regras.push(
-          `:root{--mw-sky-1:${paleta[0]};--mw-sky-2:${paleta[1]};--mw-sky-3:${paleta[2]};}`
-        );
-        if (sup.includes("cabecalho")) {
-          regras.push(
-            `:root{--app-header-background-color:${paleta[1]};` +
-              `--app-header-text-color:#fff;--mdc-theme-primary:#fff;}`
-          );
-          regras.push(
-            `.header, .toolbar, app-header, app-toolbar{` +
-              `background-image:linear-gradient(120deg,${paleta[0]},${paleta[1]} 60%,${paleta[2]});` +
-              `opacity:${a};transition:background-image .8s ease;}`
-          );
-        }
-        if (sup.includes("menu")) {
-          regras.push(
-            `:root{--sidebar-background-color:${paleta[0]};` +
-              `--sidebar-text-color:#e9eef5;--sidebar-icon-color:#c9d6e6;}`
-          );
-        }
-        if (sup.includes("fundo")) {
-          regras.push(
-            `:root{--lovelace-background:linear-gradient(180deg,${paleta[0]},${paleta[2]});}`
-          );
-        }
-        this._folha().textContent = regras.join("\n");
-
-        // O `<style>` global não alcança shadow root. O cabeçalho mora dentro
-        // do `hui-root`, então a mesma regra é injetada lá — quando der.
-        if (sup.includes("cabecalho")) this._injetarNoCabecalho(regras.join("\n"));
-      } catch (_) {
-        /* fail-open: sem céu é melhor que sem cabeçalho */
-      }
-    }
-
-    _injetarNoCabecalho(css) {
-      try {
-        const { main } = this._alvo();
-        if (!main) return;
-        const drawer = main.shadowRoot.querySelector("ha-drawer");
-        const resolver =
-          (drawer && drawer.querySelector("partial-panel-resolver")) ||
-          main.shadowRoot.querySelector("partial-panel-resolver");
-        const painel = resolver && resolver.querySelector("ha-panel-lovelace");
-        const root = painel && painel.shadowRoot && painel.shadowRoot.querySelector("hui-root");
-        const alvo = root && root.shadowRoot;
-        if (!alvo) return;
-        let f = alvo.getElementById && alvo.getElementById("mw-sky-style");
-        if (!f) {
-          f = document.createElement("style");
-          f.id = "mw-sky-style";
-          alvo.appendChild(f);
-        }
-        f.textContent = css;
-      } catch (_) {
-        /* fail-open */
-      }
-    }
-
-    _despintar() {
-      try {
-        const f = document.getElementById("mw-sky-style");
-        if (f) f.remove();
-        const { main } = this._alvo();
-        const root =
-          main &&
-          main.shadowRoot
-            .querySelector("ha-drawer")
-            ?.querySelector("partial-panel-resolver")
-            ?.querySelector("ha-panel-lovelace")?.shadowRoot?.querySelector("hui-root");
-        const interno = root && root.shadowRoot && root.shadowRoot.getElementById("mw-sky-style");
-        if (interno) interno.remove();
-      } catch (_) {
-        /* fail-open */
-      }
+    _aplicar() {
+      if (!this._config || !this._hass) return;
+      const assinatura = JSON.stringify(this._config);
+      if (assinatura === this._aplicado) return;
+      this._aplicado = assinatura;
+      // Escrever a configuração é o único trabalho do card. Quem pinta — e
+      // quem continua pintando depois que a view fecha — é o singleton.
+      const sky = globalThis.__MW_SKY;
+      if (sky) sky.guardar(this._config);
     }
   }
 
@@ -1205,25 +1364,139 @@
     { name: "dias", selector: { number: { min: 3, max: 16, step: 1, mode: "box" } } },
   ];
 
-  const ESQUEMA_SKY = [
-    { name: "entity", selector: { entity: { domain: "weather" } } },
-    {
-      name: "superficies",
-      selector: {
-        select: {
-          multiple: true,
-          mode: "list",
-          options: [
-            { value: "cabecalho", label: "Barra superior" },
-            { value: "menu", label: "Menu lateral" },
-            { value: "fundo", label: "Fundo da view (mais caro)" },
-          ],
+  // Editor do céu: precisa da LISTA DE DASHBOARDS da casa, que só existe no
+  // WebSocket. Por isso ele não usa o editor genérico — monta o próprio
+  // esquema depois de perguntar ao HA quais telas existem.
+  class SkyEditor extends HTMLElement {
+    setConfig(config) {
+      this._config = { ...SKY_DEFAULTS, ...config };
+      this._renderar();
+    }
+
+    set hass(hass) {
+      const primeiro = !this._hass;
+      this._hass = hass;
+      if (this._form) this._form.hass = hass;
+      if (primeiro) this._buscarDashboards();
+    }
+
+    async _buscarDashboards() {
+      try {
+        const lista = await this._hass.connection.sendMessagePromise({
+          type: "lovelace/dashboards/list",
+        });
+        // A Home padrão não vem na lista: ela é o painel `lovelace`, que
+        // existe sempre e é justamente a tela que o dono mais olha.
+        this._dashboards = [
+          { value: "lovelace", label: "Home padrão" },
+          ...(lista || [])
+            .filter((d) => d.url_path)
+            .map((d) => ({ value: d.url_path, label: d.title || d.url_path })),
+        ];
+      } catch (_) {
+        this._dashboards = [{ value: "lovelace", label: "Home padrão" }];
+      }
+      this._renderar();
+    }
+
+    _schema() {
+      const base = [
+        { name: "entity", selector: { entity: { domain: "weather" } } },
+        { name: "ativo", selector: { boolean: {} } },
+        {
+          name: "superficies",
+          selector: {
+            select: {
+              multiple: true,
+              mode: "list",
+              options: [
+                { value: "cabecalho", label: "Barra superior" },
+                { value: "menu", label: "Menu lateral" },
+                { value: "fundo", label: "Fundo da view (mais caro)" },
+              ],
+            },
+          },
         },
-      },
-    },
-    { name: "intensidade", selector: { number: { min: 0.2, max: 1, step: 0.05, mode: "slider" } } },
-    { name: "movimento", selector: { boolean: {} } },
-  ];
+        {
+          name: "escopo",
+          selector: {
+            select: {
+              mode: "dropdown",
+              options: [
+                { value: "todos", label: "Em todos os dashboards" },
+                { value: "lista", label: "Só nos que eu escolher" },
+              ],
+            },
+          },
+        },
+      ];
+      if (this._config && this._config.escopo === "lista") {
+        base.push({
+          name: "dashboards",
+          selector: {
+            select: {
+              multiple: true,
+              mode: "list",
+              options: this._dashboards || [
+                { value: "lovelace", label: "Home padrão" },
+              ],
+            },
+          },
+        });
+      }
+      base.push({
+        name: "intensidade",
+        selector: { number: { min: 0.2, max: 1, step: 0.05, mode: "slider" } },
+      });
+      return base;
+    }
+
+    _renderar() {
+      if (!this._form) {
+        this._form = document.createElement("ha-form");
+        this._form.computeLabel = (f) => LABELS[f.name] || f.name;
+        this._form.addEventListener("value-changed", (ev) => this._mudou(ev));
+        this.appendChild(this._form);
+        this._ajuda = document.createElement("div");
+        this._ajuda.style.cssText =
+          "padding:8px 4px 0;font-size:12px;line-height:1.4;" +
+          "color:var(--secondary-text-color)";
+        this.appendChild(this._ajuda);
+      }
+      if (this._hass) this._form.hass = this._hass;
+      this._form.schema = this._schema();
+      const dados = { ...SKY_DEFAULTS, ...this._config };
+      for (const k of Object.keys(dados)) {
+        if (dados[k] === "" || dados[k] === null) delete dados[k];
+      }
+      this._form.data = dados;
+      this._ajuda.textContent =
+        "O céu vale para o Home Assistant inteiro enquanto você estiver num " +
+        "dashboard, e continua valendo depois que esta view fechar — a " +
+        "configuração fica guardada no seu usuário. Para desligar, use a " +
+        "chave acima; remover o card não apaga a configuração.";
+    }
+
+    _mudou(ev) {
+      ev.stopPropagation();
+      const limpo = { type: this._config.type, entity: this._config.entity };
+      for (const [k, v] of Object.entries({ ...ev.detail.value })) {
+        if (v === undefined || v === null || v === "") continue;
+        if (JSON.stringify(v) !== JSON.stringify(SKY_DEFAULTS[k])) limpo[k] = v;
+      }
+      // `ativo: false` é escolha, não valor padrão que se possa omitir.
+      if (ev.detail.value.ativo === false) limpo.ativo = false;
+      this._config = { ...this._config, ...ev.detail.value };
+      this._renderar();
+      this.dispatchEvent(
+        new CustomEvent("config-changed", {
+          bubbles: true,
+          composed: true,
+          detail: { config: limpo },
+        })
+      );
+    }
+  }
 
   if (!customElements.get("mw-leticia-weather-card")) {
     customElements.define("mw-leticia-weather-card", WeatherCard);
@@ -1232,10 +1505,7 @@
       criarEditor("card", ESQUEMA_CARD, DEFAULTS)
     );
     customElements.define("mw-leticia-sky-card", SkyCard);
-    customElements.define(
-      "mw-leticia-sky-card-editor",
-      criarEditor("sky", ESQUEMA_SKY, SKY_DEFAULTS)
-    );
+    customElements.define("mw-leticia-sky-card-editor", SkyEditor);
   }
 
   window.customCards = window.customCards || [];
