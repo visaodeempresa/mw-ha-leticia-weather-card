@@ -34,10 +34,13 @@ def views() -> list[dict]:
             "path": "agora",
             "icon": "mdi:weather-partly-cloudy",
             "cards": [
-                # O céu no cabeçalho e no menu: card de altura zero, ligado só
-                # nesta tela.
+                # O céu no cabeçalho e no menu. O card é só o PAINEL DE
+                # CONTROLE: quem pinta é o pintor único do módulo, que segue o
+                # dono pelos dashboards e não morre quando esta view fecha.
+                # `escopo: todos` inclui a Home padrão.
                 _card(type="custom:mw-leticia-sky-card", entity=TEMPO,
-                      superficies=["cabecalho", "menu"], intensidade=0.9),
+                      superficies=["cabecalho", "menu"], intensidade=0.9,
+                      escopo="todos"),
                 _card(type="custom:mw-leticia-weather-card", entity=TEMPO,
                       layout="completo", dias=8),
                 _card(type="custom:mw-barometer-card",

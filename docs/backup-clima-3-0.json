@@ -1,0 +1,135 @@
+{
+  "views": [
+    {
+      "title": "Agora",
+      "path": "agora",
+      "icon": "mdi:weather-partly-cloudy",
+      "cards": [
+        {
+          "type": "custom:mw-leticia-sky-card",
+          "entity": "weather.tempo_aguas_claras",
+          "superficies": [
+            "cabecalho",
+            "menu"
+          ],
+          "intensidade": 0.9
+        },
+        {
+          "type": "custom:mw-leticia-weather-card",
+          "entity": "weather.tempo_aguas_claras",
+          "layout": "completo",
+          "dias": 8
+        },
+        {
+          "type": "custom:mw-barometer-card",
+          "entity": "sensor.tempo_aguas_claras_pressao_ao_nivel_do_mar",
+          "temperatura_entity": "sensor.tempo_aguas_claras_temperatura",
+          "umidade_entity": "sensor.tempo_aguas_claras_umidade",
+          "vento_entity": "sensor.tempo_aguas_claras_direcao_do_vento",
+          "acabamento": "latao",
+          "tamanho": "grande"
+        }
+      ]
+    },
+    {
+      "title": "Semana",
+      "path": "semana",
+      "icon": "mdi:calendar-week",
+      "cards": [
+        {
+          "type": "custom:mw-leticia-weather-card",
+          "entity": "weather.tempo_aguas_claras",
+          "layout": "semana",
+          "dias": 16
+        },
+        {
+          "type": "custom:mw-leticia-weather-card",
+          "entity": "weather.tempo_aguas_claras",
+          "layout": "hoje",
+          "horas": 48
+        }
+      ]
+    },
+    {
+      "title": "Confiança",
+      "path": "confianca",
+      "icon": "mdi:scale-balance",
+      "cards": [
+        {
+          "type": "markdown",
+          "content": "## Por que os aplicativos discordam\n\nTodos olham o mesmo quintal, mas cada um roda um **modelo diferente**, num **ponto de grade diferente**, a uma **altitude de modelo diferente**. Aqui o número é a mediana ponderada de quatro modelos, e a largura da discórdia aparece junto — em vez de escondida."
+        },
+        {
+          "type": "entities",
+          "title": "O conjunto",
+          "entities": [
+            {
+              "entity": "sensor.tempo_aguas_claras_temperatura",
+              "name": "Temperatura fundida"
+            },
+            {
+              "entity": "sensor.tempo_aguas_claras_confianca_discordia_entre_modelos",
+              "name": "Discórdia entre modelos"
+            },
+            {
+              "entity": "sensor.tempo_aguas_claras_pressao_ao_nivel_do_mar"
+            },
+            {
+              "entity": "sensor.tempo_aguas_claras_umidade"
+            },
+            {
+              "entity": "sensor.tempo_aguas_claras_vento"
+            }
+          ]
+        },
+        {
+          "type": "history-graph",
+          "hours_to_show": 48,
+          "title": "Temperatura e discórdia",
+          "entities": [
+            {
+              "entity": "sensor.tempo_aguas_claras_temperatura"
+            },
+            {
+              "entity": "sensor.tempo_aguas_claras_confianca_discordia_entre_modelos"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Alertas",
+      "path": "alertas",
+      "icon": "mdi:alert-outline",
+      "cards": [
+        {
+          "type": "custom:mw-leticia-weather-card",
+          "entity": "weather.tempo_aguas_claras",
+          "layout": "alerta"
+        },
+        {
+          "type": "entities",
+          "title": "Riscos vigiados",
+          "entities": [
+            "binary_sensor.tempo_aguas_claras_clima_seco",
+            "binary_sensor.tempo_aguas_claras_calor",
+            "binary_sensor.tempo_aguas_claras_frio",
+            "binary_sensor.tempo_aguas_claras_chuva_forte",
+            "binary_sensor.tempo_aguas_claras_tempestade",
+            "binary_sensor.tempo_aguas_claras_vento_forte",
+            "binary_sensor.tempo_aguas_claras_radiacao_uv"
+          ]
+        },
+        {
+          "type": "entities",
+          "title": "Ar",
+          "entities": [
+            "sensor.tempo_aguas_claras_qualidade_do_ar",
+            "sensor.tempo_aguas_claras_pm2_5",
+            "sensor.tempo_aguas_claras_indice_uv"
+          ]
+        }
+      ]
+    }
+  ]
+}
