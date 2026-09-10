@@ -243,6 +243,17 @@ check(
   "o hui-root é reconstruído na troca de painel e leva o style junto"
 );
 check(
+  "o shell recebe a paleta ESCURECIDA, não a crua",
+  /escurecer\(/.test(src) && !/opacity:\$\{alfa\}/.test(src),
+  "paleta crua + tinta branca cravada punha o título do dashboard em 2,84:1 " +
+    "e os ícones de editar e menu em 1,45:1 — na casa inteira"
+);
+check(
+  "a intensidade entra como mistura, não como opacity do elemento",
+  /const k = 0\.35 \+ 0\.30 \*/.test(src),
+  "opacity desbota o texto junto com o fundo"
+);
+check(
   "as telas alvo são configuráveis na tela",
   /lovelace\/dashboards\/list/.test(src) && /"lovelace", label: "Home padrão"/.test(src),
   "escolher onde o céu vale é do dono, não do código"
@@ -275,8 +286,13 @@ check(
 );
 check(
   "a chave de repintura inclui alertas e ar",
-  /avisos\.map\(/.test(src) && /ar\.aqi/.test(src),
+  /avisos[\s\S]{0,40}\.map\(/.test(src) && /ar\.aqi/.test(src),
   "sem isso o card fica mudo justamente quando chega um aviso de tempestade"
+);
+check(
+  "a chave distingue alerta REEMITIDO com o mesmo tipo",
+  /a\.titulo\}:\$\{a\.descricao/.test(src),
+  "mesmo tipo e severidade com texto novo não redesenhava"
 );
 
 console.log("honestidade:");
@@ -289,8 +305,13 @@ check("usa a escala canônica de temperatura (regra 40)",
   /mw-climate-scale v1/.test(src) && /mwClimateColor\("temp"/.test(src));
 check(
   "usa a escala canônica de PRESSÃO (regra 190)",
-  /mw-pressure-scale v1/.test(src) && /mwPressureColor\(/.test(src),
-  "pintar pressão com cor própria cria uma segunda verdade"
+  /mw-pressure-scale v1/.test(src) && /mwPressureLabel\(/.test(src),
+  "a faixa da pressão vem da escala da casa, não de texto inventado"
+);
+check(
+  "a faixa da pressão vai ESCRITA, não pintada",
+  /color:currentColor/.test(src) && /esc\(mwPressureLabel\(/.test(src),
+  "cor sobre o céu chegou a 1,04:1 e a faixa só existia no title="
 );
 check(
   "denuncia pressão de estação em vez de desenhar errado",

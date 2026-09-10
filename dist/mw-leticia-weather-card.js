@@ -21,7 +21,7 @@
  */
 (() => {
   "use strict";
-  const VERSION = "0.3.0";
+  const VERSION = "0.3.1";
 
   // >>> mw-climate-scale v1 — fonte canônica: /Volumes/SSD-T1-01/CLAUDE-SSD/IA/lib/mw-climate-scale/mw-climate-scale.js
   // Escala canônica de cor por temperatura (°C) e umidade relativa (%).
@@ -509,6 +509,10 @@
     ha-card { overflow: hidden; position: relative; }
     .ceu { position: absolute; inset: 0; z-index: 0; }
     .astros { position: absolute; top: 0; left: 0; right: 0; height: 118px; }
+    /* Em card baixo não há faixa de topo livre: o disco cai em cima do texto
+       («20°» sobre a lua deu 3,07:1). Nesses layouts o céu fica só no degradê. */
+    ha-card[data-layout="faixa"] .astros,
+    ha-card[data-layout="semana"] .astros { display: none; }
     .astros svg { width: 100%; height: 100%; display: block; }
     /* Véu: o texto é branco e o céu vai de quase preto a azul claro.
        A primeira versão era mais FORTE no topo e quase transparente no meio —
@@ -717,7 +721,12 @@
         (this._previsao || [])[0] && this._previsao[0].datetime,
         this._config.layout,
         new Date().getHours(),
-        avisos.map((a) => `${a.tipo}:${a.severidade}`).join("|"),
+        // Título e descrição entram: um aviso REEMITIDO com o mesmo tipo e a
+        // mesma severidade, mas com texto novo («20 a 30 mm/h» → «60 a 100
+        // mm/h, risco de deslizamento»), não redesenhava.
+        avisos
+          .map((a) => `${a.tipo}:${a.severidade}:${a.titulo}:${a.descricao}`)
+          .join("|"),
         ar.aqi,
         ar.pm25,
       ]);
@@ -776,7 +785,7 @@
 
       this.shadowRoot.innerHTML = `
         <style>${ESTILO}</style>
-        <ha-card style="--mw-ceu-fundo:${paleta[0]}">
+        <ha-card data-layout="${esc(c.layout)}" style="--mw-ceu-fundo:${paleta[0]}">
           ${fundoCeu}
           <div class="conteudo">
             ${corpo}
@@ -839,12 +848,15 @@
           ${d.vento !== null ? `<span><ha-icon icon="mdi:weather-windy" style="--mdc-icon-size:16px"></ha-icon>${fmt(d.vento)} km/h</span>` : ""}
           ${
             d.pressao !== null
-              ? `<span title="${esc(mwPressureLabel(d.pressao) || "fora de escala")}">` +
-                `<ha-icon icon="mdi:gauge" style="--mdc-icon-size:16px;color:${
-                  mwPressureColor(d.pressao, 1) || "currentColor"
-                }"></ha-icon>${fmt(d.pressao, 1)} hPa${
-                  d.pressaoDeEstacao ? " (estação)" : ""
-                }</span>`
+              ? // A FAIXA vai ESCRITA, não pintada. Cor sobre o céu é portador
+                // frágil: o ícone chegava a 1,04:1 com céu de neve, e a faixa
+                // só existia no `title=`, que não aparece em toque.
+                `<span><ha-icon icon="mdi:gauge" style="--mdc-icon-size:16px;` +
+                `color:currentColor"></ha-icon>${fmt(d.pressao, 1)} hPa${
+                  mwPressureLabel(d.pressao)
+                    ? ` · ${esc(mwPressureLabel(d.pressao))}`
+                    : " · fora de escala"
+                }${d.pressaoDeEstacao ? " (estação)" : ""}</span>`
               : ""
           }
           ${d.uv !== null ? `<span><ha-icon icon="mdi:weather-sunny-alert" style="--mdc-icon-size:16px"></ha-icon>UV ${fmt(d.uv, 1)}</span>` : ""}
@@ -911,8 +923,12 @@
           if (i % Math.ceil(p.length / 6) !== 0) return "";
           const hora = new Date(h.datetime).getHours();
           return (
+            // O primeiro rótulo começa em x=0 e o `<svg>` recorta metade dele:
+            // «19h» virava «9h». A âncora muda nas pontas.
             `<text x="${x(i).toFixed(2)}" y="87" fill="currentColor" font-size="8" ` +
-            `text-anchor="middle" opacity="0.85">${String(hora).padStart(2, "0")}h</text>` +
+            `text-anchor="${
+              i === 0 ? "start" : i >= p.length - 2 ? "end" : "middle"
+            }" opacity="0.85">${String(hora).padStart(2, "0")}h</text>` +
             `<text x="${x(i).toFixed(2)}" y="${(y(num(h.temperature)) - 5).toFixed(2)}" ` +
             `fill="currentColor" font-size="9" text-anchor="middle" font-weight="600">` +
             `${fmt(h.temperature)}°</text>`
@@ -1081,35 +1097,56 @@
       }
     },
 
+    // Mistura a cor com o mesmo azul-quase-preto do véu do card. É isto que
+    // torna a tinta branca legível: sem ele, um meio-dia de céu limpo deixava
+    // o título do dashboard em 2,84:1 e os ícones de editar e de menu em
+    // 1,45:1 — e isso atinge QUEM NEM TEM O CARD NA TELA, porque o pintor é
+    // da casa inteira. Medido pelo inspetor de design em 2026-09-10.
+    escurecer(hex, k) {
+      try {
+        const n = hex.replace("#", "");
+        const c = [0, 2, 4].map((i) => parseInt(n.slice(i, i + 2), 16));
+        const alvo = [8, 12, 22];
+        const m = c.map((v, i) => Math.round(v * (1 - k) + alvo[i] * k));
+        return `#${m.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+      } catch (_) {
+        return hex;
+      }
+    },
+
     regras(paleta, alfa, superficies) {
+      // A intensidade entra como MISTURA, não como `opacity` no elemento:
+      // `opacity` desbota o texto junto com o fundo, e foi assim que os ícones
+      // do cabeçalho foram parar em 1,45:1.
+      const k = 0.35 + 0.30 * Math.max(0, Math.min(1, alfa));
+      const p = paleta.map((c) => this.escurecer(c, k));
       const regras = [
-        `:root{--mw-sky-1:${paleta[0]};--mw-sky-2:${paleta[1]};` +
-          `--mw-sky-3:${paleta[2]};}`,
+        `:root{--mw-sky-1:${p[0]};--mw-sky-2:${p[1]};--mw-sky-3:${p[2]};}`,
       ];
       if (superficies.includes("cabecalho")) {
         // Valor LITERAL, não `var()`: o app companion iOS/Android não resolve
-        // `var()` nas variáveis de shell.
+        // `var()` nas variáveis de shell. E a ponta ESCURA da paleta, porque o
+        // degradê de 120° joga a clara na direita, onde moram o lápis e o menu.
         regras.push(
-          `:root{--app-header-background-color:${paleta[1]};` +
+          `:root{--app-header-background-color:${p[0]};` +
             `--app-header-text-color:#fff;--mdc-theme-primary:#fff;}`
         );
         regras.push(
           `.header, .toolbar, app-header, app-toolbar{` +
-            `background-image:linear-gradient(120deg,${paleta[0]},` +
-            `${paleta[1]} 60%,${paleta[2]});opacity:${alfa};` +
+            `background-image:linear-gradient(120deg,${p[0]},` +
+            `${p[1]} 60%,${p[2]});` +
             `transition:background-image .8s ease;}`
         );
       }
       if (superficies.includes("menu")) {
         regras.push(
-          `:root{--sidebar-background-color:${paleta[0]};` +
+          `:root{--sidebar-background-color:${p[0]};` +
             `--sidebar-text-color:#e9eef5;--sidebar-icon-color:#c9d6e6;}`
         );
       }
       if (superficies.includes("fundo")) {
         regras.push(
-          `:root{--lovelace-background:linear-gradient(180deg,${paleta[0]},` +
-            `${paleta[2]});}`
+          `:root{--lovelace-background:linear-gradient(180deg,${p[0]},${p[2]});}`
         );
       }
       return regras.join("\n");
